@@ -6,8 +6,9 @@ the machine's settings for them. Copy sdcard/C.IMG, sdcard/D.IMG and sdcard/tiny
 
     tools/make_sdcard.py [--force]
 
-Needs dosfstools (mkfs.fat, fsck.fat) and the Python packages in requirements.txt; downloads FD14-LiteUSB.zip from
-freedos.org into images/ the first time.
+Needs the Python packages in requirements.txt (run from anywhere, it uses the repository's .venv when there is one);
+checks the disks with fsck.fat if dosfstools is installed. Downloads FD14-LiteUSB.zip from freedos.org into images/
+the first time.
 """
 import argparse
 import io
@@ -15,14 +16,10 @@ import os
 import subprocess
 import sys
 import urllib.request
-import warnings
 import zipfile
 
-warnings.filterwarnings("ignore")
-from pyfatfs.PyFatFS import PyFatFS  # noqa: E402
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from dosdisk import fsck  # noqa: E402
+from dosdisk import PyFatFS, fsck  # noqa: E402  (switches to the repository's .venv if pyfatfs is missing)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 URL = "https://download.freedos.org/1.4/FD14-LiteUSB.zip"

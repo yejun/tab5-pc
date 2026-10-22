@@ -22,8 +22,10 @@ To build the firmware:
   and lvgl. Built and tested with m5stack:esp32 3.3.9, M5Unified 0.2.25, M5GFX 0.2.33 and lvgl 9.6.0.
 - git, curl, make, tar with xz, a C compiler, `xxd`, and the GitHub CLI (`gh`, logged in: `gh auth login`) for
   tiny386's BIOS images.
-- Python 3: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`.
-- To prepare cards on a computer (`tools/make_sdcard.py`, `tools/dosdisk.py`): dosfstools (`mkfs.fat`, `fsck.fat`).
+- Python 3: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`. Run the tools with
+  `.venv/bin/python` (`tools/make_sdcard.py` and `tools/dosdisk.py` also find `.venv` by themselves).
+- Optional: dosfstools (`fsck.fat`; `brew install dosfstools` on macOS), with which `tools/make_sdcard.py` and
+  `tools/dosdisk.py` check the disks they write.
 
 ## Build and flash
 

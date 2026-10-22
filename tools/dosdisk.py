@@ -8,17 +8,34 @@
 
 DOS paths use / or \\, e.g. /GAMES. Names must suit DOS (8.3); long names are stored as long file names, which
 plain DOS doesn't see. `put` doesn't replace files that are already there (pyfatfs can corrupt the directory doing
-so), and checks the disk with fsck.fat afterwards. Needs dosfstools (mkfs.fat, fsck.fat) and pyfatfs (requirements.txt).
+so), and checks the disk with fsck.fat afterwards if dosfstools is installed. Needs pyfatfs (requirements.txt): run
+from anywhere, it uses the repository's .venv when there is one.
 """
 import argparse
 import os
 import struct
 import subprocess
 import sys
+import time
 import warnings
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def use_venv():
+    """Run this script again with the repository's .venv when pyfatfs isn't installed for this Python."""
+    venv = os.path.join(ROOT, ".venv")
+    python = os.path.join(venv, "bin", "python")
+    if os.path.exists(python) and os.path.realpath(sys.prefix) != os.path.realpath(venv):
+        os.execv(python, [python] + sys.argv)
+    sys.exit("pyfatfs is missing: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt")
+
+
 warnings.filterwarnings("ignore")   # pyfatfs pulls in fs, which warns about pkg_resources
-from pyfatfs.PyFatFS import PyFatFS  # noqa: E402
+try:
+    from pyfatfs.PyFatFS import PyFatFS
+except ImportError:
+    use_venv()
 
 HEADS, SECTORS = 16, 63     # the geometry tiny386's IDE disk reports (and DOS expects in the partition table)
 START = SECTORS             # the partition starts on the second track, as DOS's FDISK does
@@ -46,11 +63,39 @@ def new(path, mb, label):
         mbr[446:462] = bytes([0x80]) + chs(START) + bytes([ptype]) + chs(START + count - 1) + struct.pack("<II", START, count)
         mbr[510:512] = b"\x55\xaa"
         f.write(mbr)
-    # the geometry in the boot sector as tiny386 reports it: a DOS boot sector reads by cylinder/head/sector
-    subprocess.run(["mkfs.fat", "-F", "16", "--offset", str(START), "-h", str(START), "-S", "512",
-                    "-g", f"{HEADS}/{SECTORS}", "-n", label[:11].upper(), path, str(count // 2)],
-                   check=True, stdout=subprocess.DEVNULL)
+        format_fat16(f, START, count, label)
+    fsck(path, START * 512)
     print(f"{path}: {total * 512 >> 20} MB, FAT16, label {label.upper()}")
+
+
+def format_fat16(f, start, count, label):
+    """An empty FAT16 file system on the partition (count sectors from sector start), as DOS's FORMAT leaves it: 2 FATs,
+    512 root entries, the cluster size DOS picks for the size, the volume label. The boot sector carries the geometry
+    tiny386 reports (a DOS boot sector reads by cylinder/head/sector) and, as code, INT 18h (the next boot device);
+    a system's SYS writes its own."""
+    spc = next(n for limit, n in ((32680, 2), (262144, 4), (524288, 8), (1048576, 16), (2097152, 32), (1 << 32, 64))
+               if count <= limit)
+    reserved, root_n = 1, 512
+    root_secs = root_n * 32 // 512
+    fatsz = (count - reserved - root_secs + 256 * spc + 2 - 1) // (256 * spc + 2)   # (the FAT specification's)
+    name = label[:11].upper().ljust(11).encode("ascii")
+    b = bytearray(512)
+    b[0:3] = b"\xeb\x3c\x90"
+    b[3:11] = b"TAB5-PC "
+    struct.pack_into("<HBHBHHBHHHII", b, 11, 512, spc, reserved, 2, root_n, count if count < 65536 else 0, 0xF8, fatsz,
+                     SECTORS, HEADS, start, count if count >= 65536 else 0)
+    struct.pack_into("<BBBI", b, 36, 0x80, 0, 0x29, int(time.time()) & 0xFFFFFFFF)
+    b[43:62] = name + b"FAT16   "
+    b[62:66] = b"\xcd\x18\xeb\xfe"   # int 18h; jmp $
+    b[510:512] = b"\x55\xaa"
+    base = start * 512
+    f.seek(base)
+    f.write(b)
+    for i in range(2):   # each FAT: the media byte, then the end-of-chain mark
+        f.seek(base + (reserved + i * fatsz) * 512)
+        f.write(b"\xf8\xff\xff\xff")
+    f.seek(base + (reserved + 2 * fatsz) * 512)   # the root directory: the volume label
+    f.write(name + bytes([0x08]) + bytes(20))
 
 
 def partition_offset(path):
