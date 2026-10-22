@@ -2,7 +2,8 @@
 
 ## 1.0.0 (2026-10-22)
 
-The first public release, as source code (no firmware binaries or SD card images; see `docs/DISTRIBUTION.md`).
+The first public release: the source code, and firmware images with their notices and corresponding source (see
+`docs/DISTRIBUTION.md`). No SD card images.
 
 - A 386/486 PC on the M5Stack Tab5, built on tiny386 (pinned commit, with the patches in `vendor/patches`): VGA,
   PS/2 keyboard and mouse, Sound Blaster 16, AdLib, PC speaker, IDE hard disks, CD-ROM images, floppies, SeaBIOS.

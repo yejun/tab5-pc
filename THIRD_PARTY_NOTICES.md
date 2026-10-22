@@ -22,8 +22,9 @@ This project's changes in the patch files are offered under the license of the f
 ## Fetched by the tools and built into the firmware
 
 None of this is kept in this repository. `tools/fetch_vendor.sh` fetches it at pinned versions, and the Arduino
-toolchain provides the rest. A compiled firmware image contains all of it, so whoever distributes such an image has
-to meet these licenses (see [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md)).
+toolchain provides the rest. A compiled firmware image contains all of it. The released images come with
+`tab5-pc-<version>-NOTICES.txt` (all the notices and license texts) and `tab5-pc-<version>-source.tar.gz` (the
+corresponding source, including the LGPL parts); see [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md).
 
 **[tiny386](https://github.com/hchunhui/tiny386)** at `vendor/tiny386.commit` (d81e225783cd), with `vendor/patches`.
 Its README states: "The cpu emulator and the project as a whole are both licensed under the BSD-3-Clause license.
@@ -55,7 +56,8 @@ pinned in `vendor/bios.lock`: SeaBIOS rel-1.17.0-20-g81ec9ec0 (coreboot/seabios 
   their own licenses: FreeRTOS, lwIP, mbedTLS, newlib, TinyUSB, ESP-Hosted, ...);
 - [M5Unified](https://github.com/m5stack/M5Unified) 0.2.25 (MIT, (c) 2021 M5Stack);
 - [M5GFX](https://github.com/m5stack/M5GFX) 0.2.33 (MIT, (c) 2021 M5Stack), which includes LovyanGFX (FreeBSD
-  license) and other parts listed in its README;
+  license) and other parts listed in its README; of its fonts the firmware uses the default one (Adafruit GFX's,
+  BSD) and Font4 (Bodmer's TFT_eSPI, FreeBSD license);
 - [LVGL](https://github.com/lvgl/lvgl) 9.6.0 (MIT, (c) 2025 LVGL Kft), with its built-in Montserrat fonts (SIL Open
   Font License 1.1) and symbol font (from Font Awesome Free).
 

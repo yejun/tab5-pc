@@ -1,44 +1,34 @@
 # Before distributing binaries
 
-This repository is meant to be published as source code: our code under MIT, plus the third-party material listed in
+This repository is published as source code: our code under MIT, plus the third-party material listed in
 `THIRD_PARTY_NOTICES.md`. Compiled firmware and ready-made SD card images are different: they contain third-party
-code that this repository only fetches, some of it under the LGPL and GPL. This page lists what is still needed
-before either is offered for download. None of it has been done yet, and none of it is a legal review.
+code that this repository only fetches, some of it under the LGPL and GPL. This page lists what goes with them. It
+is not a legal review.
 
-## Compiled firmware (`tab5_386.ino.merged.bin` and the like)
+## Compiled firmware
 
 A firmware image contains tiny386, FMOPL, SeaBIOS, ESP-Hosted, the Arduino core, ESP-IDF's libraries, M5Unified,
-M5GFX and LVGL (with its fonts), as listed in `THIRD_PARTY_NOTICES.md`. Before distributing one:
+M5GFX and LVGL (with its fonts), as listed in `THIRD_PARTY_NOTICES.md`. Each released image is published on the
+GitHub release page together with:
 
-1. **Notices and license texts for everything in the image**, shipped with it. Besides the texts in `LICENSES/`:
-   tiny386's MIT files (Bellard, Karpov, Henke), inih's BSD-3-Clause, the LGPL-2.1 (FMOPL, the Arduino core), the
-   LGPL-3.0 together with the GPL-3.0 it builds on (SeaBIOS), and the notices of ESP-IDF's components, M5Unified,
-   M5GFX and the parts it includes, LVGL, Montserrat (SIL OFL 1.1) and Font Awesome Free. ESP-IDF's and the Arduino
-   core's own license lists are a starting point. Linker map files (`build/*/tab5_386.ino.map`) show what an image
-   actually contains, which may be less than the board package provides.
-2. **The corresponding source** for the LGPL parts, for the exact build: this repository at the release's commit,
-   tiny386 at `vendor/tiny386.commit`, ESP-Hosted at `vendor/esp-hosted.commit`, the BIOS source in
-   `vendor/bios.lock`, and the board package and library versions (m5stack:esp32 3.3.9, M5Unified 0.2.25, M5GFX
-   0.2.33, lvgl 9.6.0). Offer it next to the binary, or with a written offer as the LGPL describes. Depending on
-   upstream download sites alone is fragile: those versions can disappear.
-3. **A working way to rebuild and relink with modified LGPL parts.** Statically linked LGPL code (FMOPL, the
-   Arduino core) needs one. Here everything is built from source by `tools/build.sh`, so the route is: change
-   `vendor/tiny386/fmopl.c` (or the board package's core), rebuild, flash. Still to do: write that down as a
-   release-specific procedure, check that it works from a clean machine with the pinned versions, and decide how to
-   handle ESP-IDF's precompiled libraries in the board package (their sources are ESP-IDF v5.5.4 and
-   esp32-arduino-lib-builder at the commit in the package's `versions.txt`).
-4. **The BIOS images, pinned.** `vendor/bios.lock` records the tested images' SHA-256 and their source (SeaBIOS
-   commit, tiny386's patch and config). `tools/fetch_vendor.sh` checks the images it gets. The images themselves
-   come from tiny386's *continuous* release, which is rebuilt with every upstream push. The current one differs from
-   the tested one only in its build stamp, but it is not a stable download. For a binary release:
-   - either keep the exact images used, with their checksums, next to the release together with the SeaBIOS source
-     archive, tiny386's `seabios/patch` and `seabios/config`, and the LGPL-3.0 and GPL-3.0 texts;
-   - or build them with `BIOS_FROM_SOURCE=1 tools/fetch_vendor.sh` and publish the same set. The bytes then differ
-     from the tested images, so test the firmware again. SeaBIOS also writes the build's date and host name into its
-     version string, so build on a machine whose name may be published.
-5. **`vgafont.c`**: tiny386's VGA text font has no notice in its file. Establish where it comes from and under which
-   terms before distributing an image that contains it.
-6. **The ESP32-C6's firmware** (the Tab5's Wi-Fi chip) is not part of this firmware and is not changed by it.
+1. **`tab5-pc-<version>-NOTICES.txt`**: the notices and full license texts of everything in the image (MIT, BSD,
+   Apache-2.0 with ESP-IDF's component list, LGPL-2.1, LGPL-3.0 with GPL-3.0, OFL-1.1, Font Awesome's terms).
+2. **`tab5-pc-<version>-source.tar.gz`**: the corresponding source: this repository at the release tag; tiny386 and
+   ESP-Hosted as fetched and patched (FMOPL among them); the BIOS images and SeaBIOS's source at the pinned commit with
+   tiny386's patch and config; the Arduino core's source as built (the board package's `cores/` and `libraries/`,
+   m5stack:esp32 3.3.9). M5Unified, M5GFX and LVGL (MIT) are named by version.
+3. **The rebuild route** for the LGPL parts: the README's "Build and flash" with the versions above. Change
+   `vendor/tiny386/fmopl.c`, SeaBIOS (`tools/build_seabios.sh`) or the board package's core, rebuild, flash.
+   ESP-IDF's libraries come precompiled in the board package (ESP-IDF v5.5.4, Apache-2.0 and the component licenses
+   in the notices).
+4. **The BIOS images, pinned**: the tested images (SHA-256 in `vendor/bios.lock`) are in the source archive, not
+   fetched again from tiny386's continuous release.
+
+Still open:
+
+- **`vgafont.c`**: tiny386's VGA text font has no notice of its own; it is distributed as part of tiny386.
+- **Chip revisions**: the `postv3` image (ESP32-P4 v3.x) is built the same way but has not been tested on a device.
+- **The ESP32-C6's firmware** (the Tab5's Wi-Fi chip) is not part of this firmware and is not changed by it.
 
 ## SD card images (`tools/make_sdcard.py`)
 

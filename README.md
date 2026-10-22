@@ -27,6 +27,13 @@ To build the firmware:
 - Optional: dosfstools (`fsck.fat`; `brew install dosfstools` on macOS), with which `tools/make_sdcard.py` and
   `tools/dosdisk.py` check the disks they write.
 
+## Ready-made firmware
+
+Each [release](https://github.com/yejun/tab5-pc/releases) has the firmware as one image to write at address 0
+(`tab5-pc-<version>-prev3.bin` for ESP32-P4 chips of revision v1.x, `-postv3.bin` for v3.x), with its licenses and
+notices and the corresponding source. It is also in M5Burner. To write it yourself:
+`esptool --chip esp32p4 write-flash 0x0 tab5-pc-1.0.0-prev3.bin`.
+
 ## Build and flash
 
 ```

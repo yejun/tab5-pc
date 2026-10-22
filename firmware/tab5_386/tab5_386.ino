@@ -180,10 +180,9 @@ static void show_status(const char* line1, const char* line2) {
   auto& d = M5.Display;
   d.fillScreen(TFT_BLACK);
   d.setTextDatum(middle_center);
-  d.setFont(&fonts::FreeSans18pt7b);
+  d.setFont(&fonts::Font4);   // (Bodmer's, FreeBSD license; see THIRD_PARTY_NOTICES.md)
   d.setTextColor(0xEF3B);
   d.drawString(line1, SCR_W / 2, SCR_H / 2 - 30);
-  d.setFont(&fonts::FreeSans12pt7b);
   d.setTextColor(0x8C94);
   d.drawString(line2, SCR_W / 2, SCR_H / 2 + 25);
   d.display();
