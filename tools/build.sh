@@ -20,6 +20,10 @@ SKETCH="$ROOT/firmware/tab5_386"
 BUILD="$ROOT/build/$CHIP"
 # the tiny386 core (compiled through the wrappers in firmware/tab5_386/src), and LVGL finds lv_conf.h in the sketch
 FLAGS="-I$ROOT/vendor/tiny386 -DLV_CONF_INCLUDE_SIMPLE -I$SKETCH ${DEFS:-}"   # DEFS: e.g. -DT386_FPU_STATS
+# source file names in the image (assert messages) relative to their tree, not this computer's directories
+ADATA=$(arduino-cli config get directories.data 2>/dev/null || echo "$HOME/.arduino15")
+AUSER=$(arduino-cli config get directories.user 2>/dev/null || echo "$HOME/Arduino")
+FLAGS="$FLAGS -ffile-prefix-map=$ROOT=tab5-pc -ffile-prefix-map=$AUSER=Arduino -ffile-prefix-map=$ADATA=arduino15"
 # ESP-Hosted's SDIO driver, patched (vendor/esp-hosted, from tools/fetch_vendor.sh; src/esp_hosted_sdio.c)
 [[ -f "$ROOT/vendor/esp-hosted/host/drivers/transport/sdio/sdio_drv.c" ]] || { echo "run tools/fetch_vendor.sh first" >&2; exit 1; }
 H=$ROOT/vendor/esp-hosted
