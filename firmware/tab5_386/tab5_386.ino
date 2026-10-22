@@ -1,6 +1,6 @@
 // Tab5 386: a PC emulated on the M5Stack Tab5 by tiny386 (https://github.com/hchunhui/tiny386, vendor/tiny386):
 // an i386 with VGA, PS/2 keyboard, IDE disks, floppies and SeaBIOS, enough for DOS.
-// MIT licence, see LICENSE; tiny386 is BSD-3-Clause, SeaBIOS LGPL-3.
+// MIT licence, see LICENSE; the third-party parts and what the firmware is built from: THIRD_PARTY_NOTICES.md.
 //
 // Core 1 runs the emulated PC flat out (loop()). Core 0 (display_task) polls the keyboard and the serial console,
 // and about 30 times a second has tiny386 draw the VGA screen into a 720 x 480 RGB565 buffer, which the PPA scales

@@ -5,6 +5,9 @@ D.IMG, a blank 504 MB FAT16 disk for programs and games (with D:\\TEST\\BEEP.COM
 the machine's settings for them. Copy sdcard/C.IMG, sdcard/D.IMG and sdcard/tiny386.ini to the root of the card.
 
     tools/make_sdcard.py [--force]
+
+Needs dosfstools (mkfs.fat, fsck.fat) and the Python packages in requirements.txt; downloads FD14-LiteUSB.zip from
+freedos.org into images/ the first time.
 """
 import argparse
 import io
@@ -105,6 +108,7 @@ def main():
     ap.add_argument("--force", action="store_true", help="replace existing images (their contents are lost)")
     args = ap.parse_args()
     c_img, d_img = (os.path.join(ROOT, "sdcard", n) for n in ("C.IMG", "D.IMG"))
+    os.makedirs(os.path.dirname(c_img), exist_ok=True)
     for p in (c_img, d_img):
         if os.path.exists(p) and not args.force:
             sys.exit(f"{p} exists (use --force to replace it)")

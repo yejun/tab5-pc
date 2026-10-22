@@ -1,6 +1,7 @@
 // ESP-Hosted's SDIO host driver (the link to the WiFi chip, an ESP32-C6), compiled here in place of the copy in the
 // Arduino core's library: the same version (2.12.8, vendor/esp-hosted.commit, fetched by tools/fetch_vendor.sh),
 // with vendor/patches/esp-hosted. Its global symbols are the library's, so the linker doesn't take the library's.
+// ESP-Hosted: Apache-2.0, Copyright Espressif Systems (Shanghai) CO LTD (LICENSES/Apache-2.0.txt).
 //
 // The changes (vendor/patches/esp-hosted/0001), mostly from newer ESP-Hosted (esp-hosted-mcu d7ebe00a, a8204f95):
 // - a read whose buffer can't be allocated is dropped and tried again, where an assert reset the Tab5 (WiFi takes

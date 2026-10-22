@@ -19,7 +19,8 @@ enum : uint8_t { KBD_REG_EVENT_NUM = 0x02, KBD_REG_BRIGHTNESS = 0x03, KBD_REG_MO
 static constexpr uint8_t KMOD_SHIFT = 0x02;   // HID modifier bit: the key needs Shift
 
 // HID usage code and forced Shift of each key, row by row, from M5Stack's M5Unit-KEYBOARD library
-// (https://github.com/m5stack/M5Unit-KEYBOARD): MIT License, Copyright (c) 2025 M5Stack Technology CO LTD.
+// (https://github.com/m5stack/M5Unit-KEYBOARD): MIT License, Copyright (c) 2025 M5Stack Technology CO LTD
+// (LICENSES/MIT-M5Unit-KEYBOARD.txt).
 // 0 = a modifier key: Sym (3,0), Aa (3,1), Ctrl (4,0), Alt (4,1).
 struct KbdKey { uint8_t code, mod; };
 static const KbdKey KBD_BASE[70] = {

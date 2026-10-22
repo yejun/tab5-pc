@@ -1,6 +1,23 @@
+ESP-Hosted sdio_drv.c (Apache-2.0, Copyright Espressif Systems (Shanghai) CO LTD), changed for Tab5 PC:
+reads retried when no buffer can be allocated, read buffers in PSRAM, an all-ones length register ignored.
+This change is under Apache-2.0 as well (LICENSES/Apache-2.0.txt).
+
+diff --git a/host/drivers/transport/sdio/sdio_drv.c b/host/drivers/transport/sdio/sdio_drv.c
+index 6dff357..eb67ce3 100644
 --- a/host/drivers/transport/sdio/sdio_drv.c
 +++ b/host/drivers/transport/sdio/sdio_drv.c
-@@ -91,6 +91,7 @@
+@@ -2,6 +2,10 @@
+  * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+  *
+  * SPDX-License-Identifier: Apache-2.0
++ *
++ * Changed for Tab5 PC (vendor/patches/esp-hosted/0001-sdio-rx-without-asserts.patch): a read whose buffer
++ * can't be allocated is retried instead of asserting; read buffers in PSRAM; a length register reading all ones
++ * is not taken as a length.
+  */
+ 
+ /*
+@@ -91,6 +95,7 @@
  
  #include "mempool.h"
  #include "transport_util.h"
@@ -8,7 +25,7 @@
  
  static const char TAG[] = "H_SDIO_DRV";
  
-@@ -447,6 +448,17 @@
+@@ -447,6 +452,17 @@ static int sdio_read_regs(uint8_t * buf)
  
  #if H_SDIO_HOST_RX_MODE != H_SDIO_ALWAYS_HOST_RX_MAX_TRANSPORT_SIZE
  
@@ -26,7 +43,7 @@
  #if DO_COMBINED_REG_READ
  // get the length from the provided register value
  static int sdio_get_len_from_slave(uint32_t *rx_size, uint32_t reg_val, bool is_lock_needed)
-@@ -458,6 +470,9 @@
+@@ -458,6 +474,9 @@ static int sdio_get_len_from_slave(uint32_t *rx_size, uint32_t reg_val, bool is_
  		return ESP_FAIL;
  	*rx_size = 0;
  
@@ -36,7 +53,7 @@
  	len &= ESP_SLAVE_LEN_MASK;
  
  	if (len >= sdio_rx_byte_count)
-@@ -500,6 +515,9 @@
+@@ -500,6 +519,9 @@ static int sdio_get_len_from_slave(uint32_t *rx_size, bool is_lock_needed)
  		return ret;
  	}
  
@@ -46,7 +63,7 @@
  	len &= ESP_SLAVE_LEN_MASK;
  
  	if (len >= sdio_rx_byte_count)
-@@ -945,12 +963,22 @@
+@@ -945,12 +967,22 @@ static uint8_t * sdio_rx_get_buffer(uint32_t len)
  	uint8_t ** buf = &double_buf.buffer[index].buf;
  
  	if (len > double_buf.buffer[index].buf_size) {
@@ -72,7 +89,7 @@
  		double_buf.buffer[index].buf_size = len;
  		ESP_LOGD(TAG, "buf %d size: %ld", index, double_buf.buffer[index].buf_size);
  	}
-@@ -1104,6 +1132,8 @@
+@@ -1104,6 +1136,8 @@ static void sdio_read_task(void const* pvParameters)
  	uint32_t len_to_read;
  	uint8_t *pos;
  	uint32_t interrupts;
@@ -81,7 +98,7 @@
  
  #if DO_COMBINED_REG_READ
  	uint32_t *intr_index = NULL;
-@@ -1144,16 +1174,19 @@
+@@ -1144,16 +1178,19 @@ static void sdio_read_task(void const* pvParameters)
  
  	for (;;) {
  
@@ -109,7 +126,7 @@
  
  		SDIO_DRV_LOCK();
  
-@@ -1201,7 +1234,7 @@
+@@ -1201,7 +1238,7 @@ static void sdio_read_task(void const* pvParameters)
  		if (BIT(SDIO_INT_STOP_THROTTLE) & interrupts)
  			wifi_tx_throttling = 0;
  
@@ -118,7 +135,7 @@
  
  			SDIO_DRV_UNLOCK();
  			continue;
-@@ -1223,9 +1256,12 @@
+@@ -1223,9 +1260,12 @@ static void sdio_read_task(void const* pvParameters)
  #else
  		ret = sdio_get_len_from_slave(&len_from_slave, ACQUIRE_LOCK);
  #endif
@@ -133,7 +150,7 @@
  			SDIO_DRV_UNLOCK();
  			continue;
  		} else {
-@@ -1235,8 +1271,15 @@
+@@ -1235,8 +1275,15 @@ static void sdio_read_task(void const* pvParameters)
  
  		/* Allocate rx buffer */
  		rxbuff = sdio_rx_get_buffer(len_from_slave);
@@ -150,7 +167,7 @@
  		data_left = len_from_slave;
  		pos = rxbuff;
  
-@@ -1274,6 +1317,10 @@
+@@ -1274,6 +1321,10 @@ static void sdio_read_task(void const* pvParameters)
  		sdio_rx_byte_count += len_from_slave;
  		sdio_rx_byte_count = sdio_rx_byte_count % ESP_RX_BYTE_MAX;
  

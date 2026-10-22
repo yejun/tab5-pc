@@ -3,6 +3,9 @@
  * Configuration file for v9.5.0
  */
 
+/* LVGL's lv_conf_template.h (v9.5.0), with this firmware's settings. MIT licence, Copyright (c) 2025 LVGL Kft:
+ * LICENSES/MIT-LVGL.txt. */
+
 /*
  * Copy this file as `lv_conf.h`
  * 1. simply next to `lvgl` folder

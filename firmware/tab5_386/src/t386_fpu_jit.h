@@ -2,7 +2,8 @@
 // translated code (t386_jit.h, K_FPU), included after tiny386's fpu.c: the translated code loads the operand itself
 // (its fast memory path, faults before anything here changes) or stores what these return (then FSTP's pop: a store
 // that faults is done again from the start). As fpu_exec2 does them, without its decoding and its memory accesses
-// through the segments and page tables.
+// through the segments and page tables. Built on tiny386's fpu.c (Copyright (c) 2024-2025 Chunhui He, BSD-3-Clause:
+// LICENSES/BSD-3-Clause-tiny386.txt).
 #include <stddef.h>
 #include <stdint.h>
 #include "t386_fpu_layout.h"

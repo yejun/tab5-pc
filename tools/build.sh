@@ -30,7 +30,8 @@ for d in host/drivers/transport/sdio host/drivers/transport host/drivers/bt host
 done
 [[ -f "$ROOT/vendor/tiny386/fmopl.inc" ]] || make -C "$ROOT/vendor/tiny386" prepare HOSTCC=${HOSTCC:-cc}
 # the BIOS images are built into the firmware, but not kept in the repository (SeaBIOS, LGPL-3): from vendor/*.bin
-[[ -f "$SKETCH/src/bios_rom.c" ]] || "$ROOT/tools/gen_bios.sh"
+B="$SKETCH/src/bios_rom.c"
+[[ -f "$B" && "$B" -nt "$ROOT/vendor/bios.bin" && "$B" -nt "$ROOT/vendor/vgabios.bin" ]] || "$ROOT/tools/gen_bios.sh"
 arduino-cli compile --fqbn "$FQBN" --build-path "$BUILD" \
   --build-property "compiler.c.extra_flags=$FLAGS" --build-property "compiler.cpp.extra_flags=$FLAGS" "$SKETCH"
 if [[ "${1:-}" == "upload" ]]; then

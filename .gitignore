@@ -6,5 +6,6 @@ __pycache__/
 /vendor/tiny386/
 /vendor/esp-hosted/
 /vendor/tiny386-release/
+/vendor/seabios/
 /vendor/*.bin
 /firmware/tab5_386/src/bios_rom.c

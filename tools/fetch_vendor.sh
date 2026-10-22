@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Fetch tiny386 at the pinned commit (vendor/tiny386.commit) into vendor/tiny386, and the BIOS images from its
-# release into vendor/ (bios.bin, vgabios.bin; built into the firmware by tools/gen_bios.sh).
+# release into vendor/ (bios.bin, vgabios.bin; built into the firmware by tools/gen_bios.sh), checked against the
+# pinned ones (vendor/bios.lock, tools/check_bios.py). BIOS_FROM_SOURCE=1 builds them from the pinned SeaBIOS source
+# instead (tools/build_seabios.sh).
 # Also ESP-Hosted's SDIO driver (vendor/esp-hosted.commit) into vendor/esp-hosted, see below.
 set -euo pipefail
 cd "$(dirname "$0")/../vendor"
@@ -14,11 +16,16 @@ for p in patches/*.patch; do   # fixes of our own (see each patch)
   git -C tiny386 apply --check "../$p" 2>/dev/null && git -C tiny386 apply "../$p" && echo "applied $p"
 done
 make -C tiny386 prepare HOSTCC=${HOSTCC:-cc}
-if [[ ! -f bios.bin || ! -f vgabios.bin ]]; then
-  rm -rf tiny386-release && mkdir tiny386-release
-  gh release download continuous -R hchunhui/tiny386 -p tiny386.tar.xz -D tiny386-release
-  tar xJf tiny386-release/tiny386.tar.xz -C tiny386-release
-  cp tiny386-release/tiny386/bios.bin tiny386-release/tiny386/vgabios.bin .
+if [[ "${BIOS_FROM_SOURCE:-0}" == 1 ]]; then
+  ../tools/build_seabios.sh
+else
+  if [[ ! -f bios.bin || ! -f vgabios.bin ]]; then
+    rm -rf tiny386-release && mkdir tiny386-release
+    gh release download continuous -R hchunhui/tiny386 -p tiny386.tar.xz -D tiny386-release
+    tar xJf tiny386-release/tiny386.tar.xz -C tiny386-release
+    cp tiny386-release/tiny386/bios.bin tiny386-release/tiny386/vgabios.bin .
+  fi
+  python3 ../tools/check_bios.py .
 fi
 echo "tiny386 $COMMIT ready"
 

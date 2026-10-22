@@ -1,5 +1,6 @@
 // A translator from x86 code to RISC-V (a JIT), in front of the fast path (t386_fast.h) and tiny386. Included after
 // t386_fast.h when T386_JIT is defined; the includer provides the platform part (see "platform" below).
+// Built on tiny386's internal definitions (Copyright (c) 2024-2025 Chunhui He, BSD-3-Clause: LICENSES/).
 //
 // Code runs as blocks: straight runs of x86 instructions (up to a jump or something the translator leaves alone),
 // translated once to RISC-V and kept in a code cache, found by their linear address, CS base and mode. Blocks jump

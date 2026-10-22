@@ -15,6 +15,9 @@
 // checks, the FPU, MMIO such as VGA memory, page-crossing accesses, faults, virtual-8086 mode) goes to tiny386's
 // cpu_exec1 for that one instruction. A handler hands over before it changes anything, so tiny386 starts the
 // instruction afresh; that's also how faults are raised.
+//
+// Built on tiny386's internal definitions, and cpui386_step below is adapted from tiny386's: those parts are
+// Copyright (c) 2024-2025 Chunhui He, BSD-3-Clause (LICENSES/BSD-3-Clause-tiny386.txt).
 
 #ifndef T386_FAST_IRAM
 #define T386_FAST_IRAM

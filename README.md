@@ -17,11 +17,13 @@ This is an independent project, not affiliated with or endorsed by M5Stack. It i
 
 To build the firmware:
 
-- [Arduino CLI](https://arduino.github.io/arduino-cli/) with the M5Stack board package (`m5stack:esp32` 3.3.x, from
-  `https://static-cdn.m5stack.com/resource/arduino/package_m5stack_index.json`) and the libraries M5Unified (0.2.x),
-  M5GFX and lvgl (9.x).
-- git, curl, make, a C compiler, `xxd`, and the GitHub CLI (`gh`, for tiny386's BIOS images).
-- Python 3 for the tools: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`.
+- [Arduino CLI](https://arduino.github.io/arduino-cli/) with the M5Stack board package (`m5stack:esp32`, from
+  `https://static-cdn.m5stack.com/resource/arduino/package_m5stack_index.json`) and the libraries M5Unified, M5GFX
+  and lvgl. Built and tested with m5stack:esp32 3.3.9, M5Unified 0.2.25, M5GFX 0.2.33 and lvgl 9.6.0.
+- git, curl, make, tar with xz, a C compiler, `xxd`, and the GitHub CLI (`gh`, logged in: `gh auth login`) for
+  tiny386's BIOS images.
+- Python 3: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`.
+- To prepare cards on a computer (`tools/make_sdcard.py`, `tools/dosdisk.py`): dosfstools (`mkfs.fat`, `fsck.fat`).
 
 ## Build and flash
 
@@ -30,6 +32,10 @@ tools/fetch_vendor.sh            # tiny386 at the pinned commit (with the patche
                                  # its SeaBIOS images, and ESP-Hosted's SDIO driver
 tools/build.sh upload            # build and flash (port /dev/ttyACM0; or: tools/build.sh upload /dev/ttyACM1)
 ```
+
+The BIOS (SeaBIOS) comes from tiny386's release and is checked against the tested images pinned in
+`vendor/bios.lock`. If that release has moved on, `BIOS_FROM_SOURCE=1 tools/fetch_vendor.sh` builds it from the
+pinned source instead (needs a gcc that can build 32-bit x86 code).
 
 ESP32-P4 chips come in two families: `esptool` reports "revision v1.x" for earlier ones (the default build) and
 v3.x for later ones: `CHIP=postv3 tools/build.sh upload`. A build for the wrong family does not start.
@@ -115,6 +121,10 @@ Open it in a browser:
 
 Switch Wi-Fi off again when you are done. It is off after every restart, except one the page asks for.
 
+> **The file manager has no password.** Anyone who can reach the Tab5 on the network can read, change and delete
+> everything on the card and the PC's disks while it is on. Switch it on only on a network you trust, and never make
+> it reachable from the internet (no port forwarding, no exposed host).
+
 ## Settings
 
 **The settings panel** (swipe down from the top edge, Sym + Esc, or Scroll Lock; Done or Esc closes it): pause or
@@ -156,17 +166,27 @@ draw at up to ~30 frames a second; only what changed on the screen is redrawn.
 
 Notes from the development are in [`docs/NOTES.md`](docs/NOTES.md).
 
-## Credits and licences
+## Licences
 
-This project: MIT (`LICENSE`). Fetched by the tools, not kept in this repository:
+This project's own code and documentation are under the MIT License (`LICENSE`). The exceptions in this repository are
+LVGL's configuration template (`lv_conf.h`, MIT), the Tab5 Keyboard's key table from M5Stack's M5Unit-KEYBOARD (MIT,
+in `keyboard.h`), the parts of the CPU code adapted from tiny386 (BSD-3-Clause), and the patches in `vendor/patches`,
+which contain tiny386's code (BSD-3-Clause, and MIT for its QEMU-derived files) and ESP-Hosted's (Apache-2.0). Their
+notices and full license texts are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and `LICENSES/`.
 
-- [tiny386](https://github.com/hchunhui/tiny386) (BSD-3-Clause): the emulator core, with the small changes in
-  `vendor/patches`.
-- SeaBIOS and its VGA BIOS (LGPL-3), from tiny386's release, built into the firmware.
-- [ESP-Hosted](https://github.com/espressif/esp-hosted-mcu)'s SDIO driver (Apache-2.0), with the change in
-  `vendor/patches/esp-hosted`.
-- FreeDOS (GPL and other free licences), downloaded by the Tab5 or by `tools/make_sdcard.py`.
+The firmware is built from more than this repository. The tools fetch these, and they are not kept here:
 
-Included: LVGL's configuration template (`lv_conf.h`, MIT) and the Tab5 Keyboard's key table from M5Stack's
-M5Unit-KEYBOARD library (MIT, in `keyboard.h`). M5Stack and Tab5 are trademarks of their owner; other names are
-trademarks of their respective owners.
+- [tiny386](https://github.com/hchunhui/tiny386), the emulator core, at a pinned commit. It is mixed-license: BSD-3-Clause
+  as a whole, MIT for the parts that come from QEMU/TinyEMU, BSD-3-Clause for inih, and **LGPL-2.1-or-later for the
+  FMOPL AdLib synthesiser**, which this firmware compiles in.
+- SeaBIOS and its VGA BIOS (LGPL-3.0), pinned in `vendor/bios.lock` and built into the firmware.
+- [ESP-Hosted](https://github.com/espressif/esp-hosted-mcu)'s SDIO driver (Apache-2.0).
+- The Arduino core for ESP32 (LGPL-2.1) with ESP-IDF (Apache-2.0 and others), M5Unified and M5GFX (MIT), and LVGL (MIT,
+  with fonts under the SIL OFL).
+
+A compiled firmware image therefore carries obligations of its own (notices, corresponding source, LGPL relinking).
+No binaries are published here; [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) lists what is needed first. FreeDOS
+(GPL and other free licences) is downloaded by the Tab5 or by `tools/make_sdcard.py` from freedos.org; it is not part
+of this project.
+
+M5Stack and Tab5 are trademarks of their owner; other names are trademarks of their respective owners.

@@ -21,6 +21,24 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ---------------------------------------------------------------------------
-fonts.h is not covered by the license above: it embeds a subset of the Noto
-Sans font, which is licensed under the SIL Open Font License 1.1 - see
-LICENSE-fonts.txt.
+The license above covers this project's own code and documentation. It does
+not cover the third-party material in this repository, which stays under its
+own licenses (THIRD_PARTY_NOTICES.md; full texts in LICENSES/):
+
+- firmware/tab5_386/lv_conf.h: LVGL's configuration template, with this
+  project's settings (MIT, Copyright (c) 2025 LVGL Kft);
+- the key table in firmware/tab5_386/keyboard.h, from M5Unit-KEYBOARD
+  (MIT, Copyright (c) 2025 M5Stack Technology CO LTD);
+- the parts of firmware/tab5_386/src/t386_*.h adapted from tiny386
+  (BSD-3-Clause, Copyright (c) 2024-2025 Chunhui He);
+- vendor/patches/*.patch: changes to tiny386, which contain tiny386's code
+  (BSD-3-Clause; MIT for vga.c, i8254.c and i8257.c);
+- vendor/patches/esp-hosted/: a change to ESP-Hosted, which contains its
+  code (Apache-2.0, Copyright Espressif Systems (Shanghai) CO LTD);
+- what the screenshots in docs/images show of FreeDOS and its programs (under
+  FreeDOS's licenses).
+
+The changes in the patch files are offered under the license of the file they
+change. The software the tools fetch, and the firmware built from it, include
+more third-party code under other licenses, among them the LGPL: see
+THIRD_PARTY_NOTICES.md.
