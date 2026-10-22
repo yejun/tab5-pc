@@ -38,14 +38,14 @@ BEEP_COM = bytes.fromhex("b0b6e643b8a904e64288e0e642e4610c03e661b486b90700ba20a1
 
 # What the PC has: the mouse driver (PS/2), and where programs find the Sound Blaster 16 (sb16.c, pc.c).
 AUTOEXEC_ADD = """
-rem Tab5 386: the PS/2 mouse (the touch screen) and the Sound Blaster 16
+rem Tab5 PC: the PS/2 mouse (the touch screen) and the Sound Blaster 16
 SET BLASTER=A220 I5 D1 H5 T6
 CTMOUSE
 """
 
 # The machine's settings (the firmware reads /sdcard/tiny386.ini)
 TINY386_INI = """\
-; Tab5 386 machine settings. Copy this file and the disk images to the root of the SD card (FAT32 or exFAT).
+; Tab5 PC machine settings. Copy this file and the disk images to the root of the SD card (FAT32 or exFAT).
 ; /sdcard is the root of the card.
 
 [pc]
@@ -122,7 +122,7 @@ def main():
     auto = fs.readtext("/FDAUTO.BAT", encoding="cp437")
     # the live disk's paths have no drive letter (it doesn't know its own): from D:, PATH would point at D:\FREEDOS
     auto = auto.replace("SET DOSDIR=\\FREEDOS", "SET DOSDIR=C:\\FREEDOS")
-    auto = auto.replace("call CDROM.BAT", "rem call CDROM.BAT  (no CD-ROM on the Tab5 386 by default)")
+    auto = auto.replace("call CDROM.BAT", "rem call CDROM.BAT  (no CD-ROM on the Tab5 PC by default)")
     auto = auto.replace("if exist %dosdir%\\bin\\cdrom.bat call %dosdir%\\bin\\cdrom.bat display",
                         "rem if exist %dosdir%\\bin\\cdrom.bat call %dosdir%\\bin\\cdrom.bat display")
     fs.writetext("/FDAUTO.BAT", auto.replace("\r\n", "\n").replace("\n", "\r\n"), encoding="cp437")

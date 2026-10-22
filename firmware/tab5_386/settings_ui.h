@@ -538,7 +538,7 @@ static void ui_setup() {
   lv_obj_t* title = ui_label(scr, "Settings", &lv_font_montserrat_28, C_INK);
   lv_obj_set_pos(title, 34, 28);
   lv_obj_t* sub = ui_label(scr, "", &lv_font_montserrat_20, C_DIM);
-  lv_label_set_text_fmt(sub, "Tab5 386 %s", FIRMWARE_VERSION);
+  lv_label_set_text_fmt(sub, "Tab5 PC %s", FIRMWARE_VERSION);
   lv_obj_set_pos(sub, 180, 34);
   ui_batt = ui_label(scr, "", &lv_font_montserrat_20, C_INK);   // top right, like a status bar
   lv_obj_set_width(ui_batt, 782);

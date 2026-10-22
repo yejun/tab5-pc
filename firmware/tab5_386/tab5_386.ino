@@ -1,4 +1,4 @@
-// Tab5 386: a PC emulated on the M5Stack Tab5 by tiny386 (https://github.com/hchunhui/tiny386, vendor/tiny386):
+// Tab5 PC: a PC emulated on the M5Stack Tab5 by tiny386 (https://github.com/hchunhui/tiny386, vendor/tiny386):
 // an i386 with VGA, PS/2 keyboard, IDE disks, floppies and SeaBIOS, enough for DOS.
 // MIT licence, see LICENSE; the third-party parts and what the firmware is built from: THIRD_PARTY_NOTICES.md.
 //
@@ -60,7 +60,7 @@ extern VGAState* t386_vga;   // the fast video memory paths (src/t386_vga_ext.h)
 void t386_vga_fw_update(void);
 }
 
-static constexpr const char* FIRMWARE_VERSION = "0.6.25";
+static constexpr const char* FIRMWARE_VERSION = "1.0.0";
 static constexpr int EMU_W = 720, EMU_H = 480;     // tiny386's frame buffer (VGA output, centred in it)
 static constexpr int SCR_W = 1280, SCR_H = 720;    // landscape
 static constexpr int FB_W = 720, FB_H = 1280;      // the panel's native portrait frame buffer
@@ -406,7 +406,7 @@ static void print_stats() {
                   (c - c0) / dcyc, (n - n0) / dcyc);
     c0 = c; n0 = n;
   }
-  Serial.printf("tab5_386 %s | %.2f M instr/s | %.1f fps drawn, %.1f unchanged (check %.1f ms), redraw %.1f ms "
+  Serial.printf("tab5-pc %s | %.2f M instr/s | %.1f fps drawn, %.1f unchanged (check %.1f ms), redraw %.1f ms "
                 "(compare + PPA %.1f ms, %.1f of %d bands%s) | "
                 "sound %s, %u blocks, %u underruns, mix <= %.1f ms | keyboard %s, %u keys | taps %u + %u right | psram free %u | "
                 "internal free %u (lowest %u, largest block %u)\n",
@@ -811,7 +811,7 @@ void setup() {
   cfg.internal_spk = true;   // configured here, switched on only while there is sound (audio.h)
   M5.begin(cfg);
   audio_setup();
-  Serial.printf("\nTab5 386 %s (reset reason %d)\n", FIRMWARE_VERSION, (int)esp_reset_reason());
+  Serial.printf("\nTab5 PC %s (reset reason %d)\n", FIRMWARE_VERSION, (int)esp_reset_reason());
   kbd_begin();
   usb_kbd_setup();
   g_rot = kbd_present_at_boot() ? 3 : 1;   // docked in the keyboard, the Tab5 is upside down
@@ -831,7 +831,7 @@ void setup() {
 
   ui_setup();
   g_mouse_gain = g_prefs.getFloat("mouse", 1.0f);
-  show_status("Tab5 386", "Starting...");
+  show_status("Tab5 PC", "Starting...");
   const bool have_sd = sd_mount();
   if (have_sd) Serial.printf("SD card: %llu MB\n", SD_MMC.cardSize() >> 20);
   else Serial.println("SD card: none");

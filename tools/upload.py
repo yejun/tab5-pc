@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Copy files or folders to the Tab5 386 over WiFi (its web server), in the 256 KB chunks it takes.
+"""Copy files or folders to the Tab5 PC over WiFi (its web server), in the 256 KB chunks it takes.
 
     tools/upload.py [--resume] HOST VOL DEST SRC...   e.g. tools/upload.py 192.168.1.50 hdb /APPS ~/dos/MYPROG
     VOL: hda..hdd (the PC's disks: the PC pauses, and restarts when done) or sd (the card)

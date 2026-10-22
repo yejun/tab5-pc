@@ -21,7 +21,7 @@ index 6dff357..eb67ce3 100644
  
  #include "mempool.h"
  #include "transport_util.h"
-+#include "esp_heap_caps.h"   // (Tab5 386)
++#include "esp_heap_caps.h"   // (Tab5 PC)
  
  static const char TAG[] = "H_SDIO_DRV";
  
@@ -29,7 +29,7 @@ index 6dff357..eb67ce3 100644
  
  #if H_SDIO_HOST_RX_MODE != H_SDIO_ALWAYS_HOST_RX_MAX_TRANSPORT_SIZE
  
-+/* (Tab5 386) From esp-hosted-mcu a8204f95: a PKT_LEN register reading all ones is the SDIO bus faulting (a floating
++/* (Tab5 PC) From esp-hosted-mcu a8204f95: a PKT_LEN register reading all ones is the SDIO bus faulting (a floating
 + * bus reads back 0xFF), not a length. Taken as one, it became a ~960 KB read whose buffer could not be allocated, and
 + * sdio_rx_get_buffer() asserted, resetting the host. */
 +static inline bool sdio_pkt_len_reg_is_bus_fault(uint32_t reg_val)
@@ -67,7 +67,7 @@ index 6dff357..eb67ce3 100644
  	uint8_t ** buf = &double_buf.buffer[index].buf;
  
  	if (len > double_buf.buffer[index].buf_size) {
-+		/* (Tab5 386) From esp-hosted-mcu d7ebe00a: allocate the larger buffer before freeing the old one,
++		/* (Tab5 PC) From esp-hosted-mcu d7ebe00a: allocate the larger buffer before freeing the old one,
 +		 * and on failure keep the old one and return NULL, so the caller drops this read (was: assert).
 +		 * In PSRAM if there is room: whole cache lines, for reads of whole blocks (H_SDIO_RX_BLOCK_ONLY_XFER),
 +		 * which the SDMMC driver takes there; it grows to the longest burst, and internal RAM runs short */
@@ -93,8 +93,8 @@ index 6dff357..eb67ce3 100644
  	uint32_t len_to_read;
  	uint8_t *pos;
  	uint32_t interrupts;
-+	bool pending = true;   // (Tab5 386, from a8204f95) look for data without waiting for an interrupt
-+	bool retry_rx = false; // (Tab5 386) a read was dropped: its data is still there, whatever the interrupt bits
++	bool pending = true;   // (Tab5 PC, from a8204f95) look for data without waiting for an interrupt
++	bool retry_rx = false; // (Tab5 PC) a read was dropped: its data is still there, whatever the interrupt bits
  
  #if DO_COMBINED_REG_READ
  	uint32_t *intr_index = NULL;
@@ -141,7 +141,7 @@ index 6dff357..eb67ce3 100644
  #endif
 -		if (ret || !len_from_slave) {
 -			ESP_LOGW(TAG, "invalid ret or len_from_slave: %d %ld", ret, len_from_slave);
-+		if (ret == ESP_ERR_INVALID_STATE) {   // (Tab5 386) a bus fault: dropped, on to the next interrupt
++		if (ret == ESP_ERR_INVALID_STATE) {   // (Tab5 PC) a bus fault: dropped, on to the next interrupt
 +			SDIO_DRV_UNLOCK();
 +			continue;
 +		}
@@ -155,7 +155,7 @@ index 6dff357..eb67ce3 100644
  		/* Allocate rx buffer */
  		rxbuff = sdio_rx_get_buffer(len_from_slave);
 -		assert(rxbuff);
-+		if (!rxbuff) {   // (Tab5 386, from d7ebe00a / a8204f95) dropped: tried again shortly
++		if (!rxbuff) {   // (Tab5 PC, from d7ebe00a / a8204f95) dropped: tried again shortly
 +			pending = true;
 +			retry_rx = true;
 +			SDIO_DRV_UNLOCK();
@@ -172,7 +172,7 @@ index 6dff357..eb67ce3 100644
  		sdio_rx_byte_count = sdio_rx_byte_count % ESP_RX_BYTE_MAX;
  
 +#if H_SDIO_HOST_RX_MODE != H_SDIO_ALWAYS_HOST_RX_MAX_TRANSPORT_SIZE
-+		pending = true;   // (Tab5 386, from a8204f95) more may have come in meanwhile
++		pending = true;   // (Tab5 PC, from a8204f95) more may have come in meanwhile
 +#endif
 +
  		if (unlikely(ret))

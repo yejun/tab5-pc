@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Talk to the Tab5 386 over USB serial: print what it says, optionally sending commands first.
+"""Talk to the Tab5 PC over USB serial: print what it says, optionally sending commands first.
 
     tools/console.py [--port PORT] [--secs N] [--reset] [CMD ...]
 """

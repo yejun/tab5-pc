@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build (and optionally flash) the Tab5 386 firmware:  tools/build.sh [upload [PORT]]
+# Build (and optionally flash) the Tab5 PC firmware:  tools/build.sh [upload [PORT]]
 #
 #   CHIP=postv3 tools/build.sh upload    for ESP32-P4 chips of revision v3.0 and later
 #

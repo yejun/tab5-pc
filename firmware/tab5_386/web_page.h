@@ -3,7 +3,7 @@
 
 static const char WEB_PAGE[] = R"HTML(<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Tab5 386</title>
+<title>Tab5 PC</title>
 <style>
 :root{--bg:#11141c;--card:#1a1f2b;--line:#2a3142;--ink:#e8e4da;--dim:#8b93a7;--accent:#5ae2c7;--warn:#f0a868;--bad:#f07878;--hover:#222838}
 @media (prefers-color-scheme:light){:root{--bg:#f3f1ec;--card:#fff;--line:#dedad0;--ink:#1d2230;--dim:#6b7285;--accent:#118f78;--warn:#b86a12;--bad:#c23b3b;--hover:#f0ede6}}
@@ -47,7 +47,7 @@ td.name a{color:var(--ink);text-decoration:none;cursor:pointer}
 #editor .card{width:min(900px,100%);height:min(720px,100%);display:flex;flex-direction:column;gap:10px;margin:0}
 #edtext{flex:1;width:100%;resize:none;font:13px/1.45 ui-monospace,Menlo,Consolas,monospace;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px;tab-size:8}
 </style></head><body><main>
-<header><h1>Tab5 386</h1><span id="state" class="pill">…</span><span class="grow"></span>
+<header><h1>Tab5 PC</h1><span id="state" class="pill">…</span><span class="grow"></span>
 <button id="pausebtn"></button><button class="danger" id="resetbtn">Reset PC</button></header>
 
 <div class="card banner" id="stopped"><b>The PC is stopped.</b> Its disk images can be deleted or replaced now, and

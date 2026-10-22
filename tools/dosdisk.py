@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Make and fill DOS hard disk images (one FAT partition) on the PC, for the Tab5 386's SD card.
+"""Make and fill DOS hard disk images (one FAT partition) on the PC, for the Tab5 PC's SD card.
 
     tools/dosdisk.py new D.IMG [--mb 504] [--label DATA]   a blank, formatted disk (FAT16, up to 2047 MB)
     tools/dosdisk.py ls D.IMG [DIR]                        list a directory

@@ -214,7 +214,7 @@ static bool fd_download(uint8_t* buf, uint8_t* dict, tinfl_decompressor* inf) {
 // ---- the machine's configuration ---------------------------------------------------------------------------
 
 static const char* FD_INI_INSTALL =
-    "; Tab5 386 machine settings, written by the firmware: FreeDOS 1.4's installer is running.\r\n"
+    "; Tab5 PC machine settings, written by the firmware: FreeDOS 1.4's installer is running.\r\n"
     "; FDSETUP.IMG is FreeDOS's LiteUSB disk (the installer), C.IMG the PC's own disk it installs to (drive D: while\r\n"
     "; installing), NOCD.ISO an empty CD-ROM drive the installer wants. When the PC restarts with FreeDOS on C.IMG,\r\n"
     "; the firmware starts it from C.IMG alone (and deletes FDSETUP.IMG and NOCD.ISO).\r\n"
@@ -224,7 +224,7 @@ static const char* FD_INI_INSTALL =
     "[tab5]\r\ninstall = 1\r\n";
 
 static const char* FD_INI_FINAL =
-    "; Tab5 386 machine settings. /sdcard is the root of the card; disk images are files on it.\r\n"
+    "; Tab5 PC machine settings. /sdcard is the root of the card; disk images are files on it.\r\n"
     "; FreeDOS 1.4, installed on C.IMG by its own installer.\r\n"
     "[pc]\r\n"
     "; hard disks hda hdb hdc hdd, CD-ROMs cda cdb cdc cdd (an .iso), floppies fda fdb (1.44 MB etc. images)\r\n"
@@ -255,7 +255,7 @@ static void fd_find_iso() {
 }
 
 static const char* FD_INI_ISO =
-    "; Tab5 386 machine settings, written by the firmware: the PC starts from the CD (%s) while C.IMG has no\r\n"
+    "; Tab5 PC machine settings, written by the firmware: the PC starts from the CD (%s) while C.IMG has no\r\n"
     "; files, and from C.IMG once something is installed on it (the BIOS tries the hard disk first). Without the CD\r\n"
     "; in the drive: delete the cdc line.\r\n"
     "[pc]\r\nhda = /sdcard/C.IMG\r\ncdc = /sdcard/%s\r\n"
