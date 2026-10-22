@@ -1,0 +1,62 @@
+Registers kept as singles: a host's quick ways for single precision (the Tab5 firmware's, on the P4's
+single-precision FPU) keep a register's value as an exact single in sb[], so that it isn't converted to a double
+and back by each instruction; fpget makes the double when tiny386's code reads it (the single kept: the same
+value), fpset and FRSTOR forget the single, FNSAVE makes the doubles first.
+
+--- a/fpu.c
++++ b/fpu.c
+@@ -151,6 +151,10 @@
+ 	F80 rawst[8];
+ 	u8 rawtagr;
+ 	u8 rawtagw;
++#ifdef T386_FPU_SINGLES	/* registers a host's quick ways keep as singles: sb[i] exactly, st[i] maybe not */
++	u8 sv;
++	u32 sb[8];
++#endif
+ 
+ #ifdef I386_ENABLE_SSE
+ 	u32 mxcsr;
+@@ -190,6 +194,10 @@
+ {
+ 	unsigned int idx = (fpu->top + i) & 7;
+ 	unsigned int mask = 1 << idx;
++#ifdef T386_FPU_SINGLES
++	if (fpu->sv & mask)	/* (kept as a single still: the same value) */
++		return fpu->st[idx] = T386_FPU_SINGLES(fpu->sb[idx]);
++#endif
+ 	if (!(fpu->rawtagr & mask) && !(fpu->rawtagw & mask)) {
+ 		fpu->st[idx] = fromf80(fpu->rawst[idx]);
+ 		fpu->rawtagr |= mask;
+@@ -203,6 +211,9 @@
+ 	unsigned int mask = 1 << idx;
+ 	fpu->st[idx] = val;
+ 	fpu->rawtagw |= mask;
++#ifdef T386_FPU_SINGLES
++	fpu->sv &= ~mask;
++#endif
+ }
+ 
+ static void fppush(FPU *fpu, double val)
+@@ -747,6 +758,9 @@
+ 					return false;
+ 				fpu->rawtagr &= ~(1 << j);
+ 				fpu->rawtagw &= ~(1 << j);
++#ifdef T386_FPU_SINGLES
++				fpu->sv &= ~(1 << j);
++#endif
+ 				start += 10;
+ 			}
+ 			break;
+@@ -775,6 +789,12 @@
+ 					return false;
+ 				start += 28;
+ 			}
++#ifdef T386_FPU_SINGLES
++			for (int j = 0; j < 8; j++)
++				if (fpu->sv & (1 << j))
++					fpu->st[j] = T386_FPU_SINGLES(fpu->sb[j]);
++			fpu->sv = 0;
++#endif
+ 			for (int j = 0; j < 8; j++) {
+ 				if (fpu->rawtagw & (1 << j)) {
+ 					fpu->rawst[j] = tof80(fpu->st[j]);

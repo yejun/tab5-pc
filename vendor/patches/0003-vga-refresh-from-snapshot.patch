@@ -1,0 +1,32 @@
+vga: let vga_refresh read the picture from a copy of the video memory (VGAState.vga_ram_view).
+
+--- a/vga.c
++++ b/vga.c
+@@ -102,6 +102,9 @@
+ 
+     uint8_t *vga_ram;
+     int vga_ram_size;
++    /* what vga_refresh reads the picture from: NULL for vga_ram itself, or a copy of it, so that a refresh that
++       runs alongside the CPU (on another core) sees one moment, not a page the program is already redrawing */
++    uint8_t *vga_ram_view;
+     
+     uint8_t sr_index;
+     uint8_t sr[8];
+@@ -753,7 +756,7 @@
+ 
+     full_update = full_update || update_palette16(s, s->last_palette);
+ 
+-    vga_ram = s->vga_ram;
++    vga_ram = s->vga_ram_view ? s->vga_ram_view : s->vga_ram;
+ 
+     const uint8_t *font_base[2];
+     uint32_t v = s->sr[0x3];
+@@ -1020,7 +1023,7 @@
+ //        line_compare = 65535;
+     }
+     uint32_t addr1 = 4 * start_addr;
+-    uint8_t *vram = s->vga_ram;
++    uint8_t *vram = s->vga_ram_view ? s->vga_ram_view : s->vga_ram;
+     uint32_t palette[256];
+     int xdiv = 1;
+     int bpp = 4;

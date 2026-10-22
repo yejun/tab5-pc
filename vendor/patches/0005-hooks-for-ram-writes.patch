@@ -1,0 +1,71 @@
+diff --git i/i386.c w/i386.c
+index 8c01a32..ffd9b20 100644
+--- i/i386.c
++++ w/i386.c
+@@ -15,6 +15,12 @@
+ #define noinline
+ #endif
+ 
++/* called for writes to guest RAM: a code translator invalidates what it translated from there (no-op unless
++   defined) */
++#ifndef T386_RAM_WRITE
++#define T386_RAM_WRITE(cpu, addr, len) do {} while (0)
++#endif
++
+ #define I386_OPT1
+ #ifndef __wasm__
+ #define I386_OPT2
+@@ -811,6 +817,7 @@ static void IRAM_ATTR store8(CPUI386 *cpu, OptAddr *res, u8 val)
+ 	if (unlikely(addr >= cpu->phys_mem_size)) {
+ 		return;
+ 	}
++	T386_RAM_WRITE(cpu, addr, 1);
+ 	pstore8(cpu, addr, val);
+ }
+ 
+@@ -824,8 +831,11 @@ static void IRAM_ATTR store16(CPUI386 *cpu, OptAddr *res, u16 val)
+ 		return;
+ 	}
+ 	if (likely(res->res == ADDR_OK1)) {
++		T386_RAM_WRITE(cpu, res->addr1, 2);
+ 		pstore16(cpu, res->addr1, val);
+ 	} else {
++		T386_RAM_WRITE(cpu, res->addr1, 1);
++		T386_RAM_WRITE(cpu, res->addr2, 1);
+ 		pstore8(cpu, res->addr1, val);
+ 		pstore8(cpu, res->addr2, val >> 8);
+ 	}
+@@ -841,8 +851,11 @@ static void IRAM_ATTR store32(CPUI386 *cpu, OptAddr *res, u32 val)
+ 		return;
+ 	}
+ 	if (likely(res->res == ADDR_OK1)) {
++		T386_RAM_WRITE(cpu, res->addr1, 4);
+ 		pstore32(cpu, res->addr1, val);
+ 	} else {
++		T386_RAM_WRITE(cpu, res->addr1 & ~3, 4);
++		T386_RAM_WRITE(cpu, res->addr2, 4);
+ 		switch(res->addr1 & 0xf) {
+ 		case 0xf:
+ 			pstore8(cpu, res->addr1, val);
+@@ -2890,6 +2903,7 @@ static bool call_isr(CPUI386 *cpu, int no, bool pusherr, int ext);
+ 		if (cpu->cb.io_read_string && dir > 0 && \
+ 		    (memld.addr1 | 4095) < cpu->phys_mem_size && \
+ 		    !in_iomem(memld.addr1) && !in_iomem(memld.addr1 | 4095)) { \
++			T386_RAM_WRITE(cpu, memld.addr1, count * (BIT / 8)); \
+ 			int count1 = cpu->cb.io_read_string( \
+ 				cpu->cb.io, lreg16(2), \
+ 				cpu->phys_mem + memld.addr1, dir, count); \
+diff --git i/i8257.c w/i8257.c
+index 5154eaa..fc3361d 100644
+--- i/i8257.c
++++ w/i8257.c
+@@ -449,6 +449,9 @@ int i8257_dma_write_memory(IsaDma *obj, int nchan, void *buf, int pos,
+     }
+ 
+     uint8_t *p = buf;
++#ifdef T386_DMA_WRITE   /* a code translator invalidates what it translated from there */
++    T386_DMA_WRITE((r->mode & 0x20) ? addr - pos - len : addr + pos, len);
++#endif
+     if (r->mode & 0x20) {
+         for (hwaddr i = 0;
+              addr - pos - len + i < s->phys_mem_size && i < len;

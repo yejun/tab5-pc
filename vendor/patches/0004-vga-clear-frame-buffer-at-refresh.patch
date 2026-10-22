@@ -1,0 +1,59 @@
+vga: clear the frame buffer at the next refresh, from the refresh's thread: after a mode set, and when a CRT
+register that may change the picture's size changes (not a page flip), so that a smaller picture leaves no stale
+pixels around it.
+
+diff --git a/vga.c b/vga.c
+index 7270d91..1413282 100644
+--- a/vga.c
++++ b/vga.c
+@@ -105,6 +105,8 @@ struct VGAState {
+     /* what vga_refresh reads the picture from: NULL for vga_ram itself, or a copy of it, so that a refresh that
+        runs alongside the CPU (on another core) sees one moment, not a page the program is already redrawing */
+     uint8_t *vga_ram_view;
++    /* the frame buffer is to be cleared before the next refresh (the picture's size or place may have changed) */
++    int fb_clear_pending;
+     
+     uint8_t sr_index;
+     uint8_t sr[8];
+@@ -720,7 +722,7 @@ static void vbe_update_vgaregs(VGAState *s)
+     s->gr[VGA_GFX_MODE] = (s->gr[VGA_GFX_MODE] & ~0x60) |
+         (shift_control << 5);
+     s->cr[VGA_CRTC_MAX_SCAN] &= ~0x9f; /* no double scan */
+-    simplefb_clear(s->fb_dev);
++    s->fb_clear_pending = 1;
+ }
+ 
+ /* the text refresh is just for debugging and initial boot message, so
+@@ -1362,6 +1364,11 @@ void vga_refresh(VGAState *s,
+         s->graphic_mode = graphic_mode;
+         full_update = 1;
+         s->cursor_blink_time = get_uticks();
++        s->fb_clear_pending = 1;
++    }
++    if (s->fb_clear_pending) {
++        s->fb_clear_pending = 0;
++        full_update = 1;
+         simplefb_clear(fb_dev);
+     }
+ 
+@@ -1598,6 +1605,7 @@ void vga_ioport_write(VGAState *s, uint32_t addr, uint32_t val)
+                 s->cr[7] = (s->cr[7] & ~0x10) | (val & 0x10);
+             return;
+         }
++        uint8_t old_cr = s->cr[s->cr_index];
+         switch(s->cr_index) {
+         case 0x01: /* horizontal display end */
+         case 0x07:
+@@ -1611,6 +1619,12 @@ void vga_ioport_write(VGAState *s, uint32_t addr, uint32_t val)
+             s->cr[s->cr_index] = val;
+             break;
+         }
++        /* a register that may change the picture's size: the frame buffer cleared at the next refresh (not here:
++           from the CPU's thread, while a refresh may be drawing into it; not on a page flip, the start address) */
++        if (s->graphic_mode == 2 && s->cr[s->cr_index] != old_cr &&
++            !(s->cr_index >= 0x0c && s->cr_index <= 0x0f)) {   /* start address, cursor */
++            s->fb_clear_pending = 1;
++        }
+         if (s->vga_text_ops && s->graphic_mode == 1) {
+             int width = (s->cr[0x01] + 1);
+             uint32_t start_addr = s->cr[0x0d] | (s->cr[0x0c] << 8);

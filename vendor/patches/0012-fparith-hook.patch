@@ -1,0 +1,16 @@
+A hook in fparith for a quicker way to the same result: the Tab5 firmware does single precision (the x87's
+precision control 00) with the P4's single-precision FPU, in the x87's rounding mode.
+
+--- a/fpu.c
++++ b/fpu.c
+@@ -484,6 +484,10 @@
+ static void fparith(FPU *fpu, int group, unsigned int d, double a, double b)
+ {
+ 	double c;
++#ifdef T386_FPARITH_FAST	/* a quicker way to the same result (a host's single precision), if it has one */
++	if (T386_FPARITH_FAST(fpu, group, d, a, b))
++		return;
++#endif
+ 	switch (group) {
+ 	case 0: // FADD
+ 		c = a + b;

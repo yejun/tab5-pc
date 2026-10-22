@@ -1,0 +1,23 @@
+vga: shift instead of a divide per pixel in the graphics converter (xdiv is only ever 1 or 2).
+
+diff --git a/vga.c b/vga.c
+index 572f9fb..7270d91 100644
+--- a/vga.c
++++ b/vga.c
+@@ -1117,6 +1117,7 @@ static void vga_graphic_refresh(VGAState *s,
+     else
+         w = wx;
+ #endif
++    const int xshift = xdiv >> 1;
+     uint32_t plane_mask = s->ar[0x12];
+     /* how many bytes of video memory one line of the picture reads */
+     uint32_t line_bytes;
+@@ -1155,7 +1156,7 @@ static void vga_graphic_refresh(VGAState *s,
+ 
+         uint32_t color_comp = 0;
+         for (int x = x0; x < w; x++) {
+-            int x1 = x / xdiv;
++            int x1 = x >> xshift;   /* xdiv is 1 or 2: no divide per pixel */
+             uint32_t color;
+             if (shift_control == 0) {
+                 if (plane_mask == 1) {

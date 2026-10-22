@@ -1,0 +1,25 @@
+A hook when tiny386 empties its TLB, for the fast path's own: a task switch reloads CR3 with the same value
+as often as not (CWSDPMI, made for the 386, flushes the TLB that way), and that went unnoticed.
+
+--- a/i386.c
++++ b/i386.c
+@@ -21,6 +21,11 @@
+ #define T386_RAM_WRITE(cpu, addr, len) do {} while (0)
+ #endif
+ 
++/* called when the TLB is emptied (MOV CR0/CR3, INVLPG, task switches): a translator's own TLB goes too */
++#ifndef T386_TLB_CLEARED
++#define T386_TLB_CLEARED() do {} while (0)
++#endif
++
+ #define I386_OPT1
+ #ifndef __wasm__
+ #define I386_OPT2
+@@ -551,6 +556,7 @@
+ 
+ static void tlb_clear(CPUI386 *cpu)
+ {
++	T386_TLB_CLEARED();
+ 	for (int i = 0; i < tlb_size; i++) {
+ 		cpu->tlb.tab[i].lpgno = -1;
+ 	}

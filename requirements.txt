@@ -1,0 +1,5 @@
+pyserial
+numpy
+Pillow
+setuptools<81
+pyfatfs
