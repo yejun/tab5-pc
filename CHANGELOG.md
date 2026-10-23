@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Disk images that lie in pieces on the card (copied onto a card in use) are read and written as card sectors too,
+  through a list of their pieces made at startup, instead of through FatFs, which walked the file's cluster chain on
+  every backward seek. Reading a 3 MB file from an image in 590 pieces took 2.6 s instead of 85 s.
+
 ## 1.0.0 (2026-10-22)
 
 The first public release: the source code, and firmware images with their notices and corresponding source (see

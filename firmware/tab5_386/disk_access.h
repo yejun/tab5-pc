@@ -5,16 +5,15 @@
 // same DOS again: when the session ends, the PC restarts if anything was changed (and simply continues if the disk
 // was only read). A session ends on request (web: "Done") or DISK_IDLE_MS after the last use.
 //
-// The image is read and written the way tiny386 does (t386_raw_rw: raw card sectors when the image lies in one piece,
-// else its own unbuffered FILE), so there is no second view of the file that could disagree with it.
+// The image is read and written the way tiny386 does (t386_raw_rw: raw card sectors, piece by piece, else its own
+// unbuffered FILE), so there is no second view of the file that could disagree with it.
 #pragma once
 #include <ff.h>
 #include <diskio_impl.h>
 #include <esp_vfs_fat.h>
 
 extern "C" FILE* t386_ide_image(IDEIFState* s, int drive);
-extern "C" int t386_raw_attach(FILE* f, void* card, uint32_t sector0, uint32_t sectors);
-extern "C" int t386_raw_rw(FILE* f, int write, void* buf, uint32_t sector, uint32_t count);
+#include "src/t386_raw.h"
 
 // ---- raw access to the images (t386_ide.c) --------------------------------------------------------------------
 
@@ -24,8 +23,12 @@ struct SDHandle : fs::SDMMCFS {
   static uint8_t pdrv() { return SD_MMC.*static_cast<uint8_t fs::SDMMCFS::*>(&SDHandle::_pdrv); }
 };
 
-// Where a card file lies, if in one piece: its first card sector and its size in sectors.
-static bool image_extent(const char* path, uint32_t& sector0, uint32_t& sectors) {
+// Where a card file lies: its pieces on the card (*runs, heap_caps_malloc'ed, *nruns of them) and its size in
+// sectors; false if it isn't a plain file of whole sectors on the card, or lies in more than MAX_RUNS pieces.
+static constexpr uint32_t MAX_RUNS = 8192;   // (12 bytes each, in PSRAM)
+static bool image_runs(const char* path, T386Run*& runs, uint32_t& nruns, uint32_t& sectors) {
+  runs = nullptr;
+  nruns = 0;
   if (strncmp(path, "/sdcard/", 8) != 0) return false;
   char ffpath[300];
   snprintf(ffpath, sizeof(ffpath), "%u:%s", SDHandle::pdrv(), path + 7);
@@ -38,20 +41,43 @@ static bool image_extent(const char* path, uint32_t& sector0, uint32_t& sectors)
     ok = fs->ssize == 512;
 #endif
     const FSIZE_t size = f_size(fil), bcs = (FSIZE_t)fs->csize * 512;
-    const DWORD first = fil->obj.sclust;
-    ok = ok && first >= 2 && size >= 512;
-    for (FSIZE_t off = bcs; ok && off < size; off += bcs) {   // each cluster right after the one before?
-      ok = f_lseek(fil, off + 1) == FR_OK && fil->clust == first + (DWORD)(off / bcs);
-    }
-    sector0 = (uint32_t)(fs->database + (LBA_t)(first - 2) * fs->csize);
+    ok = ok && fil->obj.sclust >= 2 && size >= 512;
     sectors = (uint32_t)(size / 512);
+    uint32_t cap = 0;
+    // each cluster in turn (a seek forward goes on from the cluster before): after the one before it on the card,
+    // or a new piece
+    for (FSIZE_t off = 0; ok && off < size; off += bcs) {
+      DWORD clust = fil->obj.sclust;
+      if (off) {
+        ok = f_lseek(fil, off + 1) == FR_OK;
+        clust = fil->clust;
+      }
+      if (!ok || clust < 2) { ok = false; break; }
+      const uint32_t card = (uint32_t)(fs->database + (LBA_t)(clust - 2) * fs->csize);
+      const uint32_t sector = (uint32_t)(off / 512), count = sector + fs->csize < sectors ? fs->csize : sectors - sector;
+      if (nruns && runs[nruns - 1].card + runs[nruns - 1].count == card) {
+        runs[nruns - 1].count += count;
+        continue;
+      }
+      if (nruns == cap) {
+        cap = cap ? cap * 2 : 16;
+        T386Run* more = cap <= MAX_RUNS ? (T386Run*)heap_caps_realloc(runs, cap * sizeof(T386Run), MALLOC_CAP_SPIRAM) : nullptr;
+        if (!more) { ok = false; break; }
+        runs = more;
+      }
+      runs[nruns++] = {sector, card, count};
+    }
     f_close(fil);
   }
   free(fil);
+  if (!ok) {
+    heap_caps_free(runs);
+    runs = nullptr;
+  }
   return ok;
 }
 
-// At startup: raw access for every hard disk image that lies in one piece on the card.
+// At startup: raw access for every hard disk image on the card.
 static void disk_raw_setup(const PCConfig& conf) {
   if (!g_prefs.getBool("raw", true)) {   // serial "raw 0": for comparing
     Serial.println("disks: through FatFs (raw access off)");
@@ -59,12 +85,14 @@ static void disk_raw_setup(const PCConfig& conf) {
   }
   for (int i = 0; i < 4; ++i) {
     FILE* f = t386_ide_image(i < 2 ? g_pc->ide : g_pc->ide2, i & 1);
-    uint32_t s0 = 0, n = 0;
+    T386Run* runs;
+    uint32_t nruns, n;
     if (!f) continue;
-    if (image_extent(conf.disks[i], s0, n) && t386_raw_attach(f, SDHandle::card(), s0, n))
-      Serial.printf("disk hd%c: %s at card sector %u, raw access\n", 'a' + i, conf.disks[i], (unsigned)s0);
+    if (image_runs(conf.disks[i], runs, nruns, n) && t386_raw_attach(f, SDHandle::card(), runs, nruns, n))
+      Serial.printf("disk hd%c: %s at card sector %u%s, raw access\n", 'a' + i, conf.disks[i], (unsigned)runs[0].card,
+                    nruns > 1 ? (String(", in ") + nruns + " pieces").c_str() : "");
     else
-      Serial.printf("disk hd%c: %s is fragmented on the card: through FatFs (slower)\n", 'a' + i, conf.disks[i]);
+      Serial.printf("disk hd%c: %s: through FatFs (slower)\n", 'a' + i, conf.disks[i]);
   }
 }
 

@@ -74,9 +74,10 @@ Lessons:
 
 ## The SD card
 
-- **Raw sectors for contiguous images.** Seeking backwards in a large file through FatFs walks its cluster chain
-  from the start. A disk image that lies in one piece on the card is read and written as card sectors instead, with
-  a small read-ahead (DOS reads one sector at a time).
+- **Raw sectors for disk images.** Seeking backwards in a large file through FatFs walks its cluster chain from the
+  start. Disk images are read and written as card sectors instead, with a small read-ahead (DOS reads one sector at a
+  time), through a list of where the image's pieces lie on the card, made once at startup. Images the Tab5 writes
+  (first-start install, web uploads) are put in one piece; one copied onto a card in use may lie in many.
 - **The card and the Wi-Fi link share one SDMMC host.** While a card write holds the host, incoming network data
   waits in the Wi-Fi driver's few buffers. Uploads are received whole (256 KB at a time) into PSRAM before anything
   is written, so nothing arrives during the write.
