@@ -1,6 +1,10 @@
-diff --git i/i8254.c w/i8254.c
---- i/i8254.c
-+++ w/i8254.c
+i8254: microseconds to timer ticks with a multiply and a shift instead of a 64-bit division (a library call on a
+32-bit host, three times per timer check); pc.c's PC_STEP_COUNT can be set by the includer.
+
+diff --git a/i8254.c b/i8254.c
+index 4444556..3c7297c 100644
+--- a/i8254.c
++++ b/i8254.c
 @@ -27,6 +27,13 @@
  
  #include <stdio.h>
@@ -15,36 +19,37 @@ diff --git i/i8254.c w/i8254.c
  //#define DEBUG_PIT
  
  #define RW_STATE_LSB 1
-@@ -65,7 +72,7 @@ static int pit_get_count(PITChannelState *s)
- 	uint32_t d;
- 	int counter;
+@@ -76,7 +83,7 @@ static int pit_get_count(PITChannelState *s)
  
+ 	if (s->reload_pending)
+ 		return s->stopped_count;
 -	d = ((uint64_t) (get_uticks() - s->count_load_time)) * PIT_FREQ / 1000000;
 +	d = pit_us_to_ticks(get_uticks() - s->count_load_time);
- 	switch(s->mode) {
+ 	switch(pit_mode(s)) {
  	case 0:
  	case 1:
-@@ -90,7 +97,7 @@ static int pit_get_out1(PITChannelState *s, uint32_t current_time)
- 	uint32_t d;
- 	int out;
+@@ -103,7 +110,7 @@ static int pit_get_out1(PITChannelState *s, uint32_t current_time)
  
+ 	if (s->reload_pending)
+ 		return 0;
 -	d = ((uint64_t) (current_time - s->count_load_time)) * PIT_FREQ / 1000000;
 +	d = pit_us_to_ticks(current_time - s->count_load_time);
- 	switch(s->mode) {
+ 	switch(pit_mode(s)) {
  	default:
  	case 0:
-@@ -269,7 +276,7 @@ void i8254_update_irq(PITState *pit)
+@@ -288,7 +295,7 @@ void i8254_update_irq(PITState *pit)
  {
  	uint32_t uticks = get_uticks();
  	PITChannelState *s = pit->channels;
 -	uint32_t d = ((uint64_t) (uticks - s->count_load_time)) * PIT_FREQ / 1000000;
 +	uint32_t d = pit_us_to_ticks(uticks - s->count_load_time);
- 	switch(s->mode) {
+ 	switch(pit_mode(s)) {
  	case 2:
  	case 3:
-diff --git i/pc.c w/pc.c
---- i/pc.c
-+++ w/pc.c
+diff --git a/pc.c b/pc.c
+index f4142bd..7c757f5 100644
+--- a/pc.c
++++ b/pc.c
 @@ -135,7 +135,9 @@ static void cpu_enable_fpu(CPUABS *cpu)
  #ifndef MIXER_BUF_LEN
  #define MIXER_BUF_LEN 128

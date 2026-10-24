@@ -26,7 +26,7 @@ toolchain provides the rest. A compiled firmware image contains all of it. The r
 `tab5-pc-<version>-NOTICES.txt` (all the notices and license texts) and `tab5-pc-<version>-source.tar.gz` (the
 corresponding source, including the LGPL parts); see [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md).
 
-**[tiny386](https://github.com/hchunhui/tiny386)** at `vendor/tiny386.commit` (d81e225783cd), with `vendor/patches`.
+**[tiny386](https://github.com/hchunhui/tiny386)** at `vendor/tiny386.commit` (1a8f1e064d64), with `vendor/patches`.
 Its README states: "The cpu emulator and the project as a whole are both licensed under the BSD-3-Clause license.
 Adlib emulation is an optional part of the project, and it requires the library fmopl which is licensed under the
 LGPL. [...] SeaBIOS is distributed under the GNU LGPL-3 license. Some parts ported from QEMU/TinyEMU are under the

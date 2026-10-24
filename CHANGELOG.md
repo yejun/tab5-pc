@@ -16,6 +16,8 @@
   destination (0014); 64-bit integers and 80-bit values copied through the FPU (FILD/FISTP, FLD/FSTP) lost bits
   beyond a double's 53 (0015).
 - The translator's description (README, `docs/NOTES.md`): it handles paged protected mode too.
+- tiny386 at upstream 1a8f1e0 (was d81e225), which has the task-switch and timer-mode fixes (patch 0011 and
+  `t386_pit_fix.h` dropped) and VGA, PS/2, ATAPI and floppy fixes; patches 0002, 0004 and 0007 rebased onto it.
 - Disk images that lie in pieces on the card (copied onto a card in use) are read and written as card sectors too,
   through a list of their pieces made at startup, instead of through FatFs, which walked the file's cluster chain on
   every backward seek. Reading a 3 MB file from an image in 590 pieces took 2.6 s instead of 85 s.
