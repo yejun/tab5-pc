@@ -143,6 +143,20 @@ translation, as a home router does. The PC reaches your network and the internet
 packet driver for the NE2000 and a TCP/IP program; serial `net` shows the card's state. The same warning applies:
 anything the PC serves on those ports is open to your network.
 
+For example with FreeDOS's NE2000 packet driver (Crynwr's `NE2000.COM`) and [mTCP](https://www.brutman.com/mTCP/)
+(DHCP, ping, FTP, Telnet, HTTP client and server, IRC, time), both free software, in `C:\NET` with an `MTCP.CFG`
+that says `PACKETINT 0x60`:
+
+```
+C:\NET\NE2000 0x60 9 0x300
+set MTCPCFG=C:\NET\MTCP.CFG
+C:\NET\DHCP
+C:\NET\HTGET -o PAGE.HTM http://example.com/
+```
+
+The graphical browser MicroWeb (built for mTCP, run from its own directory) shows plain-HTTP pages; most of
+today's web needs HTTPS, which DOS programs don't do.
+
 ## Settings
 
 **The settings panel** (swipe down from the top edge, Sym + Esc, or Scroll Lock; Done or Esc closes it): pause or
