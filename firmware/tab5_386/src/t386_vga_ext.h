@@ -234,13 +234,54 @@ void t386_vga_fw_update(void) {
         }
         else if (!(mode & 0x10) && (mode & 3) == 1)
             f.kind = T386_FW_LATCH;
+        else if (!(mode & 0x10)) {   // write modes 0 (with the rest), 2 and 3: as vga_latched_write
+            const int wmode = mode & 3, b = s->gr[VGA_GFX_DATA_ROTATE] & 7;
+            f.kind = wmode == 0 ? T386_FW_WM0 : wmode == 2 ? T386_FW_WM2 : T386_FW_WM3;
+            f.rot = b;
+            f.rot8 = 8 - b;
+            f.op = s->gr[VGA_GFX_DATA_ROTATE] >> 3;
+            f.bm8 = s->gr[VGA_GFX_BIT_MASK];
+            f.bm32 = f.bm8 * 0x01010101u;
+            const uint32_t setm = mask16[s->gr[VGA_GFX_SR_ENABLE] & 15];
+            f.nsetm = ~setm;
+            f.srv = mask16[s->gr[VGA_GFX_SR_VALUE] & 15] & (wmode == 0 ? setm : 0xffffffffu);
+            f.m16 = mask16;
+        }
+        if (!(s->msr & MSR_RAM_ENABLE)) f.kind = T386_FW_NONE;   // (writes go nowhere: vga.c)
     }
     t386_vga_fw = f;
 }
 
+// A byte written in write mode 0, 2 or 3 as vga.c's vga_mem_write does it: the four planes' bytes for the latches
+// (the rotation, set/reset, logical operation and bit mask applied)
+static inline uint32_t vga_latched_write(VGAState* s, int mode, uint32_t v) {
+    uint32_t val, bit_mask;
+    const int b = s->gr[VGA_GFX_DATA_ROTATE] & 7;
+    if (mode == 0) {
+        v = ((v >> b) | (v << (8 - b))) & 0xff;
+        const uint32_t set_mask = mask16[s->gr[VGA_GFX_SR_ENABLE] & 15];
+        val = (v * 0x01010101u & ~set_mask) | (mask16[s->gr[VGA_GFX_SR_VALUE] & 15] & set_mask);
+        bit_mask = s->gr[VGA_GFX_BIT_MASK];
+    } else if (mode == 2) {
+        val = mask16[v & 15];
+        bit_mask = s->gr[VGA_GFX_BIT_MASK];
+    } else {   // 3
+        v = (v >> b) | (v << (8 - b));
+        bit_mask = s->gr[VGA_GFX_BIT_MASK] & v & 0xff;
+        val = mask16[s->gr[VGA_GFX_SR_VALUE] & 15];
+    }
+    switch (s->gr[VGA_GFX_DATA_ROTATE] >> 3) {
+    case 1: val &= s->latch; break;
+    case 2: val |= s->latch; break;
+    case 3: val ^= s->latch; break;
+    }
+    bit_mask *= 0x01010101u;
+    return (val & bit_mask) | (s->latch & ~bit_mask);
+}
+
 int t386_vga_write_fast(uint32_t off, int size, uint32_t v) {
     VGAState* s = t386_vga;
-    if (!s || ((s->gr[VGA_GFX_MISC] >> 2) & 3) != 1 || off + size > 0x10000) return 0;
+    if (!s || ((s->gr[VGA_GFX_MISC] >> 2) & 3) != 1 || off + size > 0x10000 || !(s->msr & MSR_RAM_ENABLE)) return 0;
     off += s->bank_offset;
     const uint8_t mm = s->sr[VGA_SEQ_MEMORY_MODE], mode = s->gr[VGA_GFX_MODE], pm = s->sr[VGA_SEQ_PLANE_WRITE];
     if (mm & VGA_SR04_CHN_4M) {
@@ -254,19 +295,23 @@ int t386_vga_write_fast(uint32_t off, int size, uint32_t v) {
     uint32_t* p = (uint32_t*)s->vga_ram + off;
     switch (mode & 3) {
     case 0:
-        if (s->gr[VGA_GFX_DATA_ROTATE] || s->gr[VGA_GFX_SR_ENABLE] || s->gr[VGA_GFX_BIT_MASK] != 0xff) return 0;
-        for (int i = 0; i < size; i++, v >>= 8) p[i] = (p[i] & ~wm) | ((v & 0xff) * 0x01010101u & wm);
-        return 1;
+        if (!s->gr[VGA_GFX_DATA_ROTATE] && !(s->gr[VGA_GFX_SR_ENABLE] & 15) && s->gr[VGA_GFX_BIT_MASK] == 0xff) {
+            for (int i = 0; i < size; i++, v >>= 8) p[i] = (p[i] & ~wm) | ((v & 0xff) * 0x01010101u & wm);
+            return 1;
+        }
+        break;
     case 1:
         for (int i = 0; i < size; i++) p[i] = (p[i] & ~wm) | (s->latch & wm);
         return 1;
     }
-    return 0;
+    for (int i = 0; i < size; i++, v >>= 8)   // (16-colour graphics drivers: set/reset, write modes 2 and 3, the bit mask)
+        p[i] = (p[i] & ~wm) | (vga_latched_write(s, mode & 3, v & 0xff) & wm);
+    return 1;
 }
 
 int t386_vga_read_fast(uint32_t off, int size, uint32_t* out) {
     VGAState* s = t386_vga;
-    if (!s || ((s->gr[VGA_GFX_MISC] >> 2) & 3) != 1 || off + size > 0x10000) return 0;
+    if (!s || ((s->gr[VGA_GFX_MISC] >> 2) & 3) != 1 || off + size > 0x10000 || !(s->msr & MSR_RAM_ENABLE)) return 0;
     off += s->bank_offset;
     const uint8_t mm = s->sr[VGA_SEQ_MEMORY_MODE], mode = s->gr[VGA_GFX_MODE];
     uint32_t v = 0;
@@ -274,12 +319,20 @@ int t386_vga_read_fast(uint32_t off, int size, uint32_t* out) {
         if (off + size > (uint32_t)s->vga_ram_size) return 0;
         for (int i = 0; i < size; i++) v |= (uint32_t)s->vga_ram[off + i] << (8 * i);
     } else {
-        if (mode & 0x18 || (off + size) * 4 > (uint32_t)s->vga_ram_size) return 0;   // odd/even, read mode 1
+        if (mode & 0x10 || (off + size) * 4 > (uint32_t)s->vga_ram_size) return 0;   // odd/even
         const int plane = s->gr[VGA_GFX_PLANE_READ];
         const uint32_t* p = (const uint32_t*)s->vga_ram + off;
+        const uint32_t cv = mask16[s->gr[VGA_GFX_COMPARE_VALUE] & 15], cm = mask16[s->gr[VGA_GFX_COMPARE_MASK] & 15];
         for (int i = 0; i < size; i++) {
             s->latch = p[i];
-            v |= GET_PLANE(s->latch, plane) << (8 * i);
+            if (!(mode & 0x08)) {
+                v |= GET_PLANE(s->latch, plane) << (8 * i);
+            } else {   // read mode 1: the dots whose colour matches (in the planes the compare mask selects)
+                uint32_t r = (s->latch ^ cv) & cm;
+                r |= r >> 16;
+                r |= r >> 8;
+                v |= (~r & 0xff) << (8 * i);
+            }
         }
     }
     *out = v;

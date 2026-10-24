@@ -25,6 +25,11 @@
 - Disk images that lie in pieces on the card (copied onto a card in use) are read and written as card sectors too,
   through a list of their pieces made at startup, instead of through FatFs, which walked the file's cluster chain on
   every backward seek. Reading a 3 MB file from an image in 590 pieces took 2.6 s instead of 85 s.
+- Video memory in the VGA's other write modes is written without tiny386's callbacks: write mode 0 with rotation,
+  set/reset, a logical operation or a bit mask, and write modes 2 and 3, by translated code itself, and read mode 1
+  (colour compare) by the fast path. Twenty fills of the 640 x 480 x 16 screen with set/reset or write modes 2 and 3
+  take about 6-7 BIOS ticks instead of 16-17. Writes go nowhere while the misc output register's RAM enable bit is
+  clear, as in vga.c.
 
 ## 1.0.0 (2026-10-22)
 

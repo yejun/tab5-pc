@@ -11,6 +11,9 @@ enum {
     T386_FW_CHAIN4,   // chain 4 (mode 13h): a byte to video memory if its plane (address & 3) is in pm
     T386_FW_PLANE1,   // T386_FW_PLANAR with one plane written (mode Y, column by column): a byte to it
     T386_FW_LINEAR,   // T386_FW_CHAIN4 with all four planes written (mode 13h as a rule): a byte to video memory
+    T386_FW_WM0,      // planar, write mode 0 with rotation, set/reset, a logical operation or a bit mask (as vga.c)
+    T386_FW_WM2,      // planar, write mode 2: the byte's low 4 bits a colour, in the bit mask's dots
+    T386_FW_WM3,      // planar, write mode 3: set/reset's colour in the dots of the rotated byte & the bit mask
 };
 
 struct T386VgaFw {
@@ -20,6 +23,13 @@ struct T386VgaFw {
     uint32_t* latch;  // the VGA's latches
     uint32_t pm;      // the plane mask (chain 4)
     uint8_t* plane1;  // T386_FW_PLANE1: video memory's byte of that plane for offset 0 (offset n: plane1 + 4n)
+    // T386_FW_WM*: the graphics controller's registers as the write needs them
+    uint32_t rot, rot8;   // the rotation (0-7), and 8 - it
+    uint32_t op;          // the logical operation with the latches: 0 none, 1 AND, 2 OR, 3 XOR
+    uint32_t bm8, bm32;   // the bit mask, and it in each plane's byte
+    uint32_t nsetm;       // write mode 0: the planes set/reset doesn't take, a byte of ones each
+    uint32_t srv;         // set/reset's colour as the planes' bytes (write mode 0: of the planes it takes)
+    const uint32_t* m16;  // write mode 2: a colour (0-15) as the planes' bytes
 };
 extern struct T386VgaFw t386_vga_fw;
 void t386_vga_fw_update(void);

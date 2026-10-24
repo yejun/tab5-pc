@@ -1749,6 +1749,8 @@ static void jit_make_vga_writes(void)
 		e_lw(T5, T2, offsetof(struct T386VgaFw, wm));
 		e_li(T1, T386_FW_LATCH);
 		u32 *latch = e_branch(BEQ, T3, T1);
+		e_li(T1, T386_FW_WM0);
+		u32 *wmodes = e_branch(BGEU, T3, T1);       // (T386_FW_WM0, 2, 3: the last kinds)
 		for (int i = 0; i < n; i++) {               // planar: the byte to the planes in wm
 			e_andi(T1, T6, 0xff);
 			e_slli(T2, T1, 8);
@@ -1774,6 +1776,80 @@ static void jit_make_vga_writes(void)
 			e_sw(T3, T4, 4 * i);
 		}
 		u32 *done2 = e_jump();
+		j_bind(wmodes, jp);   // write modes 0 (all of it), 2, 3, as vga.c's vga_mem_write: t1 the value, t3 the bit mask
+		for (int i = 0; i < n; i++) {
+#define FWO(f) ((int) offsetof(struct T386VgaFw, f))
+			e_andi(T1, T6, 0xff);
+			e_li(T2, fw);
+			e_lw(T3, T2, FWO(kind));
+			e_addi(T3, T3, -T386_FW_WM2);
+			u32 *m2 = e_branch(BEQ, T3, X0);
+			e_lw(T3, T2, FWO(rot));                 // modes 0 and 3: the byte rotated right
+			e_srl(T3, T1, T3);
+			e_lw(T2, T2, FWO(rot8));
+			e_sll(T1, T1, T2);
+			e_or(T1, T1, T3);
+			e_li(T2, fw);
+			e_lw(T3, T2, FWO(kind));
+			e_addi(T3, T3, -T386_FW_WM3);
+			u32 *m3 = e_branch(BEQ, T3, X0);
+			e_andi(T1, T1, 0xff);                   // mode 0: the byte in each plane, set/reset's where it takes
+			e_li(T3, 0x01010101);
+			e_mul(T1, T1, T3);
+			e_lw(T3, T2, FWO(nsetm));
+			e_and(T1, T1, T3);
+			e_lw(T3, T2, FWO(srv));
+			e_or(T1, T1, T3);
+			e_lw(T3, T2, FWO(bm32));
+			u32 *got0 = e_jump();
+			j_bind(m3, jp);                         // mode 3: set/reset's colour; the mask: the byte & the bit mask
+			e_lw(T3, T2, FWO(bm8));
+			e_and(T1, T1, T3);
+			e_li(T3, 0x01010101);
+			e_mul(T3, T1, T3);
+			e_lw(T1, T2, FWO(srv));
+			u32 *got3 = e_jump();
+			j_bind(m2, jp);                         // mode 2: the byte's low 4 bits a colour
+			e_andi(T1, T1, 15);
+			e_slli(T1, T1, 2);
+			e_lw(T3, T2, FWO(m16));
+			e_add(T1, T1, T3);
+			e_lw(T1, T1, 0);
+			e_lw(T3, T2, FWO(bm32));
+			j_bind(got0, jp);
+			j_bind(got3, jp);
+			e_sw(T3, SP, 0);                        // (the bit mask, while t3 holds the latches)
+			e_lw(T3, T2, FWO(latch));
+			e_lw(T3, T3, 0);
+			e_lw(T2, T2, FWO(op));                  // the logical operation with the latches
+			u32 *none = e_branch(BEQ, T2, X0);
+			e_addi(T2, T2, -1);
+			u32 *and_ = e_branch(BEQ, T2, X0);
+			e_addi(T2, T2, -1);
+			u32 *or_ = e_branch(BEQ, T2, X0);
+			e_xor(T1, T1, T3);
+			u32 *opd1 = e_jump();
+			j_bind(and_, jp);
+			e_and(T1, T1, T3);
+			u32 *opd2 = e_jump();
+			j_bind(or_, jp);
+			e_or(T1, T1, T3);
+			j_bind(none, jp);
+			j_bind(opd1, jp);
+			j_bind(opd2, jp);
+			e_xor(T1, T1, T3);                      // the masked dots from the value, the others the latches'
+			e_lw(T2, SP, 0);
+			e_and(T1, T1, T2);
+			e_xor(T1, T1, T3);
+			e_lw(T3, T4, 4 * i);                    // to the planes in wm
+			e_xor(T1, T1, T3);
+			e_and(T1, T1, T5);
+			e_xor(T3, T3, T1);
+			e_sw(T3, T4, 4 * i);
+			if (i < n - 1) e_srli(T6, T6, 8);
+#undef FWO
+		}
+		u32 *done3 = e_jump();
 		j_bind(chain4, jp);                         // chain 4: each byte if its plane (address & 3) is in pm
 		e_lw(T5, T2, offsetof(struct T386VgaFw, pm));
 		e_add(T4, T4, T1);
@@ -1794,6 +1870,7 @@ static void jit_make_vga_writes(void)
 		u32 *slow_done = e_jump();
 		j_bind(done1, jp);
 		j_bind(done2, jp);
+		j_bind(done3, jp);
 		j_bind(out3, jp);
 		e_mv(T6, X0);                               // (video memory: no code overwritten)
 		j_bind(slow_done, jp);
