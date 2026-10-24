@@ -155,7 +155,7 @@ C:\NET\HTGET -o PAGE.HTM http://example.com/
 ```
 
 The graphical browser MicroWeb (built for mTCP, run from its own directory) shows plain-HTTP pages; most of
-today's web needs HTTPS, which DOS programs don't do.
+today's web needs HTTPS, which these programs don't do.
 
 ## Settings
 
