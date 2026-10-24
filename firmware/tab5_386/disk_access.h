@@ -79,6 +79,7 @@ static bool image_runs(const char* path, T386Run*& runs, uint32_t& nruns, uint32
 
 // At startup: raw access for every hard disk image on the card.
 static void disk_raw_setup(const PCConfig& conf) {
+  t386_card_lock_setup(SDHandle::card());
   if (!g_prefs.getBool("raw", true)) {   // serial "raw 0": for comparing
     Serial.println("disks: through FatFs (raw access off)");
     return;

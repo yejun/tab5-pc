@@ -249,17 +249,31 @@ static esp_err_t h_get(httpd_req_t* req) {
   size_t n;
   size_t total = 0;
   for (;;) {
-    {
-      JitHold hold;   // (tab5_386.ino: the card's driver's cache operations on PSRAM)
-      n = fread(buf, 1, BUF, f);
+    // a read that fails is tried again before the download is given up
+    for (int tries = 0;; ++tries) {
+      {
+        JitHold hold;   // (tab5_386.ino: the card's driver's cache operations on PSRAM)
+        n = fread(buf, 1, BUF, f);
+      }
+      if (n || !ferror(f) || tries == 3) break;
+      clearerr(f);
+      fseek(f, total, SEEK_SET);
+      delay(1);
     }
     if (!n) break;
     const esp_err_t e = httpd_resp_send_chunk(req, buf, n);
-    if (e != ESP_OK) { Serial.printf("web: download %s: send failed (%s) after %u bytes\n", p.c_str(), esp_err_to_name(e), (unsigned)total); break; }
+    if (e != ESP_OK) {
+      Serial.printf("web: download %s: send failed (%s) after %u bytes\n", p.c_str(), esp_err_to_name(e), (unsigned)total);
+      fclose(f);
+      return ESP_FAIL;   // (the connection is closed: the browser sees the download fail, not a shorter file)
+    }
     total += n;
   }
-  if (ferror(f)) Serial.printf("web: download %s: read failed (errno %d) after %u bytes\n", p.c_str(), errno,
-                            (unsigned)total);
+  if (ferror(f)) {
+    Serial.printf("web: download %s: read failed (errno %d) after %u bytes\n", p.c_str(), errno, (unsigned)total);
+    fclose(f);
+    return ESP_FAIL;
+  }
   fclose(f);
   return httpd_resp_send_chunk(req, nullptr, 0);
 }

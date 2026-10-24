@@ -8,6 +8,8 @@
 #include "esp_cache.h"
 #include "esp_timer.h"
 #include "sdmmc_cmd.h"
+#include "diskio_impl.h"
+#include "diskio_sdmmc.h"
 #include "t386_raw.h"
 
 // Disk images unbuffered: the guest's writes reach the card at once (not lost if the Tab5 is reset), and the web
@@ -44,12 +46,69 @@ static uint8_t* t386_ra;
 static T386Raw* t386_ra_of;
 static uint32_t t386_ra_sector, t386_ra_count, t386_ra_next;   // (t386_ra_next: where the last read ended)
 
-// (serial "S": the card's commands, the sectors moved and the time they took, and the reads read-ahead served)
-uint32_t t386_disk_cmds, t386_disk_sectors, t386_disk_hits;
+// One command to the card at a time. Raw access (core 1) and FatFs (core 0: the web server, the settings panel; or
+// the PC's images through FatFs) each had their own lock, and a read sent while the card was still busy with the
+// other's write timed out (0x107): downloads cut short, and the guest would see I/O errors on its disk. So FatFs's
+// driver for the card is replaced by this one, the same as ESP-IDF's (diskio_sdmmc.c) but taking t386_card_lock, as
+// t386_card_rw does.
+static SemaphoreHandle_t t386_card_lock;
+static sdmmc_card_t* t386_ff_card;
+
+static DSTATUS t386_ff_init(BYTE pdrv) { return 0; }
+static DSTATUS t386_ff_status(BYTE pdrv) { return 0; }
+
+static DRESULT t386_ff_read(BYTE pdrv, BYTE* buff, uint32_t sector, unsigned count) {
+    xSemaphoreTake(t386_card_lock, portMAX_DELAY);
+    const esp_err_t e = sdmmc_read_sectors(t386_ff_card, buff, sector, count);
+    xSemaphoreGive(t386_card_lock);
+    return e == ESP_OK ? RES_OK : RES_ERROR;
+}
+
+static DRESULT t386_ff_write(BYTE pdrv, const BYTE* buff, uint32_t sector, unsigned count) {
+    xSemaphoreTake(t386_card_lock, portMAX_DELAY);
+    const esp_err_t e = sdmmc_write_sectors(t386_ff_card, buff, sector, count);
+    xSemaphoreGive(t386_card_lock);
+    return e == ESP_OK ? RES_OK : RES_ERROR;
+}
+
+static DRESULT t386_ff_ioctl(BYTE pdrv, BYTE cmd, void* buff) {
+    switch (cmd) {
+    case CTRL_SYNC: return RES_OK;
+    case GET_SECTOR_COUNT: *(DWORD*)buff = t386_ff_card->csd.capacity; return RES_OK;
+    case GET_SECTOR_SIZE: *(WORD*)buff = t386_ff_card->csd.sector_size; return RES_OK;
+    }
+    return RES_ERROR;   // (GET_BLOCK_SIZE as ESP-IDF's; no TRIM: FatFs doesn't need it)
+}
+
+// Once the card is mounted (disk_access.h)
+void t386_card_lock_setup(void* card) {
+    static const ff_diskio_impl_t impl = {
+        .init = t386_ff_init, .status = t386_ff_status, .read = t386_ff_read, .write = t386_ff_write,
+        .ioctl = t386_ff_ioctl,
+    };
+    if (t386_card_lock) return;
+    t386_card_lock = xSemaphoreCreateMutex();
+    t386_ff_card = card;
+    ff_diskio_register(ff_diskio_get_pdrv_card(card), &impl);
+}
+
+// (serial "S": the card's commands, the sectors moved and the time they took, the reads read-ahead served, and the
+// commands tried again)
+uint32_t t386_disk_cmds, t386_disk_sectors, t386_disk_hits, t386_disk_retries;
 uint64_t t386_disk_us;
+// A command that fails is tried again (it shouldn't: the lock above), so that the guest doesn't see an I/O error
 static int t386_card_rw(sdmmc_card_t* card, int write, uint8_t* buf, uint32_t sector, uint32_t n) {
     const int64_t t0 = esp_timer_get_time();
-    const esp_err_t e = write ? sdmmc_write_sectors(card, buf, sector, n) : sdmmc_read_sectors(card, buf, sector, n);
+    esp_err_t e = ESP_FAIL;
+    for (int tries = 0; tries < 4 && e != ESP_OK; ++tries) {
+        if (tries) {
+            t386_disk_retries++;
+            vTaskDelay(1);
+        }
+        xSemaphoreTake(t386_card_lock, portMAX_DELAY);
+        e = write ? sdmmc_write_sectors(card, buf, sector, n) : sdmmc_read_sectors(card, buf, sector, n);
+        xSemaphoreGive(t386_card_lock);
+    }
     t386_disk_us += esp_timer_get_time() - t0;
     t386_disk_cmds++;
     t386_disk_sectors += n;

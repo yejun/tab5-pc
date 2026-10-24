@@ -17,6 +17,8 @@ static constexpr int64_t CONNECT_TIMEOUT_MS = 20000, RETRY_MS = 30000;
 
 static void web_start();
 static void web_stop();
+static void guest_net_start();     // guest_net.h
+static void guest_net_wifi_up();
 static void pc_hold(bool on);   // the .ino
 
 static void wifi_load() {
@@ -62,6 +64,7 @@ static void wifi_enable(bool on) {
       WiFi.setAutoReconnect(true);
       pc_hold(false);
       g_wifi_ready = true;
+      guest_net_start();
     } else {
       esp_wifi_start();
     }
@@ -96,6 +99,7 @@ static void wifi_poll() {
         WiFi.setSleep(false);   // modem power save cuts throughput to ~50 KB/s; the PC keeps the CPU busy anyway
         Serial.printf("wifi: up, http://%s/\n", WiFi.localIP().toString().c_str());
         web_start();
+        guest_net_wifi_up();
       } else if (now - g_wifi_t0 > CONNECT_TIMEOUT_MS ||
                  ((st == WL_CONNECT_FAILED || st == WL_NO_SSID_AVAIL) && now - g_wifi_t0 > 4000)) {
         Serial.printf("wifi: could not connect to %s (status %d)\n", g_try_ssid.c_str(), (int)st);

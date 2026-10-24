@@ -299,6 +299,24 @@ static inline __attribute__((always_inline)) uword fast_ea(CPUI386 *cpu, const u
 	return a;
 }
 
+// tiny386's get_CF for the usual last operations, inline (ADC, SBB, RCL, RCR and the jumps on CF take it; tiny386's
+// is a call through a switch), the same expressions; the rest from tiny386's
+static inline __attribute__((always_inline)) int fast_get_CF(CPUI386 *cpu)
+{
+	if (!(cpu->cc.mask & CF))
+		return !!(cpu->flags & CF);
+	switch (cpu->cc.op) {
+	case CC_ADC: return cpu->cc.dst <= cpu->cc.src2;
+	case CC_ADD: return cpu->cc.dst < cpu->cc.src2;
+	case CC_SBB: return cpu->cc.src1 <= cpu->cc.src2;
+	case CC_SUB: return cpu->cc.src1 < cpu->cc.src2;
+	case CC_SHL: case CC_SHR: case CC_SAR: return cpu->cc.dst2 & 1;
+	case CC_AND: case CC_OR: case CC_XOR: return 0;
+	}
+	return (get_CF)(cpu);
+}
+#define get_CF(cpu) fast_get_CF(cpu)
+
 // Conditions of Jcc/SETcc (tiny386's COND()), comparing the operands directly after a CMP or SUB.
 static noinline int fast_cond_slow(CPUI386 *cpu, int c)
 {

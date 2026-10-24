@@ -1,0 +1,194 @@
+64-bit integers and 80-bit values copied through the FPU keep all their bits: FILD m64 and FLD m80 put the exact
+80 bits in rawst (the register's raw value, as FRSTOR does) instead of converting them to a double, which has 53
+bits of mantissa; FLD ST(i) copies them, and FISTP m64 and FSTP m80 store them as they are while no instruction has
+written the register since. Programs that move memory 8 bytes at a time with FILD/FISTP (a common way on CPUs
+without MMX or SSE) had bytes changed: a value beyond 2^53 lost its low bits.
+
+--- a/fpu.c
++++ b/fpu.c
+@@ -223,6 +223,69 @@
+ 	fpset(fpu, 0, val);
+ }
+ 
++/* A register's exact 80 bits, kept in rawst while no instruction has written it (rawtagw's bit clear): FLD m80,
++ * FILD m64 and FLD ST(i) push them there, and FSTP m80, FISTP m64 store them, so that 64-bit integers and 80-bit
++ * values copied through the FPU (memory moves 8 bytes at a time do this) keep all their bits; a double has 53. */
++static void fppushraw(FPU *fpu, F80 v)
++{
++	fpu->top = (fpu->top - 1) & 7;
++	unsigned int mask = 1 << fpu->top;
++	fpu->rawst[fpu->top] = v;
++	fpu->rawtagr &= ~mask;
++	fpu->rawtagw &= ~mask;
++#ifdef T386_FPU_SINGLES
++	fpu->sv &= ~mask;
++#endif
++}
++
++static bool fpgetraw(FPU *fpu, int i, F80 *v)
++{
++	unsigned int idx = (fpu->top + i) & 7;
++	if (fpu->rawtagw & (1 << idx))
++		return false;
++	*v = fpu->rawst[idx];
++	return true;
++}
++
++static F80 i64tof80(int64_t v)
++{
++	F80 r = { 0, 0, 0 };
++	if (v == 0)
++		return r;
++	uint64_t m = v < 0 ? -(uint64_t) v : (uint64_t) v;
++	int lz = __builtin_clzll(m);
++	m <<= lz;
++	r.high = (v < 0 ? 0x8000 : 0) | (16383 + 63 - lz);
++	r.mant1 = m >> 32;
++	r.mant0 = m;
++	return r;
++}
++
++/* an integer exactly (no fraction, in range)? */
++static bool f80toi64(F80 f, int64_t *res)
++{
++	int exp = f.high & 0x7fff, neg = f.high >> 15;
++	uint64_t m = (uint64_t) f.mant1 << 32 | f.mant0;
++	if (m == 0 && exp == 0) {
++		*res = 0;
++		return true;
++	}
++	if (!(m >> 63) || exp < 16383 || exp > 16383 + 63)
++		return false;
++	int shift = 16383 + 63 - exp;
++	if (shift && (m << (64 - shift)))
++		return false;
++	uint64_t u = m >> shift;
++	if (u >> 63) {	/* only -2^63 fits */
++		if (!neg || u != (uint64_t) 1 << 63)
++			return false;
++		*res = (int64_t) u;
++		return true;
++	}
++	*res = neg ? -(int64_t) u : (int64_t) u;
++	return true;
++}
++
+ static void fppop(FPU *fpu)
+ {
+ 	fpu->top = (fpu->top + 1) & 7;
+@@ -252,19 +315,6 @@
+ 	return true;
+ }
+ 
+-static bool fploadf80(void *cpu, int seg, uword addr, double *res)
+-{
+-	F80 f80;
+-	if(!cpu_load32(cpu, seg, addr, &f80.mant0))
+-		return false;
+-	if(!cpu_load32(cpu, seg, addr + 4, &f80.mant1))
+-		return false;
+-	if(!cpu_load16(cpu, seg, addr + 8, &f80.high))
+-		return false;
+-	*res = fromf80(f80);
+-	return true;
+-}
+-
+ static bool fploadi16(void *cpu, int seg, uword addr, double *res)
+ {
+ 	u16 v;
+@@ -283,19 +333,6 @@
+ 	return true;
+ }
+ 
+-static bool fploadi64(void *cpu, int seg, uword addr, double *res)
+-{
+-	u32 v1, v2;
+-	if(!cpu_load32(cpu, seg, addr, &v1))
+-		return false;
+-	if(!cpu_load32(cpu, seg, addr + 4, &v2))
+-		return false;
+-	int64_t v = v2;
+-	v = (v << 32) | v1;
+-	*res = v;
+-	return true;
+-}
+-
+ static int bcd100(u8 b)
+ {
+ 	return b - (6 * (b >> 4));
+@@ -667,16 +704,25 @@
+ 			cpu_setexc(cpu, 6, 0);
+ 			return false;
+ 		case 5: { // FLD float80
+-			if (!fploadf80(cpu, seg, addr, &a)) {
++			F80 f80;
++			if (!cpu_load32(cpu, seg, addr, &f80.mant0) || !cpu_load32(cpu, seg, addr + 4, &f80.mant1) ||
++			    !cpu_load16(cpu, seg, addr + 8, &f80.high))
+ 				return false;
+-			}
+-			fppush(fpu, a);
++			fppushraw(fpu, f80);
+ 			break;
+ 		}
+ 		case 6:
+ 			cpu_setexc(cpu, 6, 0);
+ 			return false;
+ 		case 7: { // FSTP float80
++			F80 f80;
++			if (fpgetraw(fpu, 0, &f80)) {
++				if (!cpu_store32(cpu, seg, addr, f80.mant0) || !cpu_store32(cpu, seg, addr + 4, f80.mant1) ||
++				    !cpu_store16(cpu, seg, addr + 8, f80.high))
++					return false;
++				fppop(fpu);
++				break;
++			}
+ 			a = fpget(fpu, 0);
+ 			if (!fpstoref80(cpu, seg, addr, a)) {
+ 				return false;
+@@ -864,10 +910,10 @@
+ 			break;
+ 		}
+ 		case 5: { // FILD int64
+-			if (!fploadi64(cpu, seg, addr, &a)) {
++			u32 lo, hi;
++			if (!cpu_load32(cpu, seg, addr, &lo) || !cpu_load32(cpu, seg, addr + 4, &hi))
+ 				return false;
+-			}
+-			fppush(fpu, a);
++			fppushraw(fpu, i64tof80((int64_t) ((uint64_t) hi << 32 | lo)));
+ 			break;
+ 		}
+ 		case 6: { // FBSTP
+@@ -881,6 +927,14 @@
+ 			break;
+ 		}
+ 		case 7: { // FISTP int64
++			F80 f80;
++			int64_t v;
++			if (fpgetraw(fpu, 0, &f80) && f80toi64(f80, &v)) {
++				if (!cpu_store32(cpu, seg, addr, v) || !cpu_store32(cpu, seg, addr + 4, (uint64_t) v >> 32))
++					return false;
++				fppop(fpu);
++				break;
++			}
+ 			int rc = (fpu->cw >> 10) & 3;
+ 			a = fpget(fpu, 0);
+ 			a = fpround(a, rc);
+@@ -950,10 +1004,16 @@
+ 	case 1: {
+ 		double temp, temp2;
+ 		switch (group) {
+-		case 0: // FLD
++		case 0: { // FLD
++			F80 f80;
++			if (fpgetraw(fpu, i, &f80)) {
++				fppushraw(fpu, f80);
++				break;
++			}
+ 			temp = fpget(fpu, i);
+ 			fppush(fpu, temp);
+ 			break;
++		}
+ 		case 1: // FXCH
+ 			temp = fpget(fpu, i);
+ 			temp2 = fpget(fpu, 0);

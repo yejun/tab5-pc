@@ -14,7 +14,7 @@
 //                  tools/shot.py --panel) | type <text> (\n Enter, \e Esc,
 //                  \b Backspace, \t Tab) | key <hid> [<hid>...] (tap keys by USB HID code, hex, held together;
 //                  e0/e1/e2 = Ctrl/Shift/Alt)
-//                  | fps <n> (screen refresh rate, 0 = paused) | mem | vol <0-255> | mouse <gain> | wifi on|off | wifi <ssid> <password> | ip | raw 0|1 | steps <n> | vgafast 0|1 | peek <addr> [<len>] | panel
+//                  | fps <n> (screen refresh rate, 0 = paused) | mem | vol <0-255> | mouse <gain> | wifi on|off | wifi <ssid> <password> | ip | net | raw 0|1 | steps <n> | vgafast 0|1 | peek <addr> [<len>] | panel
 //                  | reset (the PC's reset button) | poweroff
 #include <M5Unified.h>
 #include <SD_MMC.h>
@@ -27,7 +27,7 @@
 #include <atomic>
 extern "C" {
 extern int t386_jit_hot;
-extern uint32_t t386_disk_cmds, t386_disk_sectors, t386_disk_hits;
+extern uint32_t t386_disk_cmds, t386_disk_sectors, t386_disk_hits, t386_disk_retries;
 extern uint64_t t386_disk_us;
 extern uint32_t t386_sync_calls, t386_sync_cycles;
 #include "src/tab5_config.h"
@@ -132,6 +132,7 @@ static void pc_set_paused(bool on) {
 }
 
 #include "net.h"
+#include "guest_net.h"
 // An option for builds: core 0's cache maintenance on PSRAM (esp_cache_msync, and that of the PPA's and the card's
 // drivers) can be kept apart from translated code, which also lives in PSRAM (t386_jit.h, t386_jit_hold_on: core 1
 // runs the fast path meanwhile). In long tests, programs that redraw the whole screen all the time occasionally
@@ -392,9 +393,11 @@ static void print_stats() {
     const uint64_t c = g_hpc_cyc, n = g_hpc_ins;
     static uint32_t last_cmds, last_sectors, last_hits;
     static uint64_t last_us;
-    Serial.printf("disk: %.0f commands/s, %.0f KB/s, %.0f%% of the time, %.0f reads/s read ahead\n",
+    Serial.printf("disk: %.0f commands/s, %.0f KB/s, %.0f%% of the time, %.0f reads/s read ahead, %lu tried again "
+                  "since the start\n",
                   (t386_disk_cmds - last_cmds) / dt, (t386_disk_sectors - last_sectors) / 2.0 / dt,
-                  (t386_disk_us - last_us) / 1e4 / dt, (t386_disk_hits - last_hits) / dt);
+                  (t386_disk_us - last_us) / 1e4 / dt, (t386_disk_hits - last_hits) / dt,
+                  (unsigned long)t386_disk_retries);
     last_cmds = t386_disk_cmds, last_sectors = t386_disk_sectors, last_hits = t386_disk_hits, last_us = t386_disk_us;
     static uint32_t last_sc, last_scyc;
     Serial.printf("code sync: %.0f/s, %.1f%% of core 1\n", (t386_sync_calls - last_sc) / dt,
@@ -612,6 +615,8 @@ static void handle_serial() {
       const String rest = line.substring(5);
       const int sp = rest.indexOf(' ');
       wifi_start(sp < 0 ? rest : rest.substring(0, sp), sp < 0 ? "" : rest.substring(sp + 1));
+    } else if (line == "net") {   // the PC's network (guest_net.h)
+      guest_net_report();
     } else if (line == "ip") {
       Serial.printf("wifi %s, %s, http://%s/\n", g_wifi == WIFI_UP ? "up" : g_wifi == WIFI_DISABLED ? "off" : "down", g_ssid.c_str(),
                     WiFi.localIP().toString().c_str());
@@ -845,6 +850,7 @@ void setup() {
   fb_sync();
   g_input = xQueueCreate(64, sizeof(InputEvent));
   g_pc = pc_new(redraw, nullptr, (u8*)g_emu_fb, &g_conf);
+  guest_net_mac();
   t386_vga = g_pc->vga;
   t386_vga_fw_update();
   g_vga_shadow = (uint8_t*)heap_caps_malloc(g_conf.vga_mem_size, MALLOC_CAP_SPIRAM);
@@ -872,6 +878,7 @@ void loop() {
     }
     g_held = false;
     if (uxQueueMessagesWaiting(g_input)) input_deliver();
+    if (g_gnet_rx && uxQueueMessagesWaiting(g_gnet_rx)) guest_net_deliver();
     if (g_install_mode && g_pc->reset_request && fd_install_finish()) {   // an install done (fd_install.h): restart
       delay(500);
       ESP.restart();

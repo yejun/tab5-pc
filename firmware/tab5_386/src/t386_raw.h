@@ -12,6 +12,7 @@ typedef struct {
 
 int t386_raw_attach(FILE* f, void* card, T386Run* runs, uint32_t nruns, uint32_t sectors);
 int t386_raw_rw(FILE* f, int write, void* buf, uint32_t sector, uint32_t count);
+void t386_card_lock_setup(void* card);   // (before the card is used from two cores: one command at a time)
 
 #ifdef __cplusplus
 }

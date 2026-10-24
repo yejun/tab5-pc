@@ -134,6 +134,15 @@ Switch Wi-Fi off again when you are done. It is off after every restart, except 
 > everything on the card and the PC's disks while it is on. Switch it on only on a network you trust, and never make
 > it reachable from the internet (no port forwarding, no exposed host).
 
+### The PC's network
+
+While Wi-Fi is on, the PC's network card (NE2000, port 300h, IRQ 9) is connected to a small network inside the Tab5
+(192.168.77.0/24; the Tab5 at .1 hands out addresses by DHCP), routed to your Wi-Fi network with address
+translation, as a home router does. The PC reaches your network and the internet; from your network, ports 2222,
+2323 and 8080 of the Tab5 lead to the PC's 22, 23 and 80 (an SSH, Telnet or web server running in it). DOS needs a
+packet driver for the NE2000 and a TCP/IP program; serial `net` shows the card's state. The same warning applies:
+anything the PC serves on those ports is open to your network.
+
 ## Settings
 
 **The settings panel** (swipe down from the top edge, Sym + Esc, or Scroll Lock; Done or Esc closes it): pause or
@@ -169,7 +178,7 @@ saves the PC's screen (`--panel`: the Tab5's). Commands are listed at the top of
 
 The PC is roughly as fast as a 486 of the early 1990s for typical DOS programs: simple integer instructions run at
 about 20-30 million a second. A fast interpreter in front of tiny386's own handles the common instructions, and a
-translator turns frequently run code into RISC-V code (real mode and unpaged protected mode). The x87 runs in
+translator turns frequently run code into RISC-V code (real, virtual-8086 and protected mode, paged or not). The x87 runs in
 software, with single precision on the ESP32-P4's FPU where that gives the same result. Text and EGA/VGA programs
 draw at up to ~30 frames a second; only what changed on the screen is redrawn.
 
