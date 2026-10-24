@@ -191,87 +191,25 @@ static void show_status(const char* line1, const char* line2) {
   Serial.printf("status: %s | %s\n", line1, line2);
 }
 
-// Copy rows y .. y + h of tiny386's buffer onto the panel, scaled by 1.5 and rotated (y and h even, so the scaled
-// rows land on whole panel rows).
-static void ppa_rows(int y, int h) {
+// The PC's picture on the panel: at 4:3, as a monitor showed every mode (text's 720 x 400 dots and 320 x 200
+// graphics stretched to the panel's height like 640 x 480: 960 x 720 at most, in the PPA's steps of 1/16), or with
+// square pixels, 1.5 panel pixels per dot (serial "aspect 43|square", the settings panel: g_aspect43).
+static constexpr int ASPECT_W = 960;   // 4:3 at OUT_H
+static float q16(float s) { return floorf(s * 16) / 16; }
+
+// Rows y .. y + h, columns x .. x + w of src (pic_w x pic_h) onto the panel, scaled by sx, sy and rotated, their
+// top left at (ox, ly) of the landscape screen
+static void ppa_block(uint16_t* src, int pic_w, int pic_h, int x, int w, int y, int h, float sx, float sy, int ox,
+                      int ly) {
+  const int sw = (int)(w * sx), lh = (int)(h * sy);
   ppa_srm_oper_config_t op = {};
-  op.in.buffer = g_emu_fb;
-  op.in.pic_w = op.in.block_w = EMU_W;
-  op.in.pic_h = EMU_H;
+  op.in.buffer = src;
+  op.in.pic_w = pic_w;
+  op.in.pic_h = pic_h;
+  op.in.block_w = w;
+  op.in.block_offset_x = x;
   op.in.block_offset_y = y;
   op.in.block_h = h;
-  op.in.srm_cm = PPA_SRM_COLOR_MODE_RGB565;
-  op.out.buffer = g_panel_fb;
-  op.out.buffer_size = FB_W * FB_H * 2;
-  op.out.pic_w = FB_W;
-  op.out.pic_h = FB_H;
-  op.out.srm_cm = PPA_SRM_COLOR_MODE_RGB565;
-  const int ly = y * 3 / 2, lh = h * 3 / 2;   // the rows on the landscape screen
-  if (g_rot == 1) {           // logical (x, y) -> panel (719 - y, x)
-    op.rotation_angle = PPA_SRM_ROTATION_ANGLE_270;
-    op.out.block_offset_x = FB_W - (ly + lh);
-    op.out.block_offset_y = OUT_X;
-  } else {                    // logical (x, y) -> panel (y, 1279 - x)
-    op.rotation_angle = PPA_SRM_ROTATION_ANGLE_90;
-    op.out.block_offset_x = ly;
-    op.out.block_offset_y = FB_H - (OUT_X + OUT_W);
-  }
-  op.scale_x = op.scale_y = SCALE;
-  op.mode = PPA_TRANS_MODE_BLOCKING;
-  JitHold hold;
-  ppa_do_scale_rotate_mirror(g_ppa, &op);
-}
-
-// tiny386's redraw callback (it always passes the whole buffer): put the bands of BAND_H rows that changed since
-// the last time onto the panel. A blinking cursor or a typed character costs one band, not the whole screen.
-static constexpr int BAND_H = 16, BANDS = EMU_H / BAND_H;
-static uint32_t g_band_hash[BANDS];
-static bool g_bands_valid = false;   // false: copy every band (at the start, or after the panel was drawn on)
-
-static void redraw(void*, int, int, int, int) {
-  const int64_t t0 = esp_timer_get_time();
-  t386_msync(g_emu_fb, (size_t)EMU_W * EMU_H * 2, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
-  int run = -1;   // first band of the current run of changed bands
-  for (int b = 0; b <= BANDS; ++b) {
-    bool changed = false;
-    if (b < BANDS) {
-      const uint32_t h = t386_mix(0x811C9DC5u, g_emu_fb + b * BAND_H * EMU_W, BAND_H * EMU_W * 2);
-      changed = !g_bands_valid || h != g_band_hash[b];
-      g_band_hash[b] = h;
-    }
-    if (changed && run < 0) run = b;
-    if (!changed && run >= 0) {
-      ppa_rows(run * BAND_H, (b - run) * BAND_H);
-      g_stats.bands += b - run;
-      run = -1;
-    }
-  }
-  g_bands_valid = true;
-  ++g_stats.frames;
-  g_stats.ppa_us += esp_timer_get_time() - t0;
-}
-
-// The 16- and 256-colour graphics modes: t386_vga_render_native draws the lines that changed at the mode's own size
-// into g_native_fb, and the PPA scales just those onto the middle of the PC's part of the panel, by 1.5 per dot
-// across and per scan line down (as tiny386's 720 x 480 picture would be): mode 13h and 0Dh by 3 (960 x 600), 12h by
-// 1.5 (960 x 720). The sound crackled while the PPA wrote the whole picture every frame (~1.2 MB, 28 times a second),
-// and again with runs of lines of any size and place; in groups making 24 panel lines it is clean.
-static constexpr int NATIVE_W = 720, NATIVE_H = 480;
-static uint16_t* g_native_fb;
-static uint8_t g_native_dirty[NATIVE_H];
-static T386Native g_native = {};   // what is on the panel (w 0: tiny386's whole picture is)
-static bool g_native_on = true;    // serial native 0|1: tiny386's renderer for every mode instead
-
-// lines y .. y + n of g_native_fb onto the panel, at (ox, oy) of the landscape screen
-static void ppa_native(int y, int n, float sx, float sy, int ox, int oy) {
-  const int w = g_native.w, sw = (int)(w * sx);
-  const int ly = oy + (int)(y * sy), lh = (int)(n * sy);
-  ppa_srm_oper_config_t op = {};
-  op.in.buffer = g_native_fb;
-  op.in.pic_w = op.in.block_w = w;
-  op.in.pic_h = g_native.h;
-  op.in.block_offset_y = y;
-  op.in.block_h = n;
   op.in.srm_cm = PPA_SRM_COLOR_MODE_RGB565;
   op.out.buffer = g_panel_fb;
   op.out.buffer_size = FB_W * FB_H * 2;
@@ -294,22 +232,113 @@ static void ppa_native(int y, int n, float sx, float sy, int ox, int oy) {
   if (ppa_do_scale_rotate_mirror(g_ppa, &op) != ESP_OK) ++g_stats.ppa_errors;
 }
 
+// The PC's part of the panel black (before a picture that doesn't cover it all)
+static void clear_pc_area() {
+  memset(g_panel_fb + (size_t)FB_W * OUT_X, 0, (size_t)FB_W * OUT_W * 2);
+  t386_msync(g_panel_fb + (size_t)FB_W * OUT_X, (size_t)FB_W * OUT_W * 2, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+}
+
+// tiny386's redraw callback (it always passes the whole buffer): put the bands of BAND_H rows that changed since
+// the last time onto the panel. A blinking cursor or a typed character costs one band, not the whole screen.
+static constexpr int BAND_H = 16, BANDS = EMU_H / BAND_H;
+static uint32_t g_band_hash[BANDS];
+static bool g_bands_valid = false;   // false: copy every band (at the start, or after the panel was drawn on)
+
+static int g_box_w, g_box_h;   // at 4:3: the size of tiny386's picture on the panel (0: none yet)
+
+// At 4:3: tiny386's picture alone (pw x ph, centred in its buffer) scaled to fill the height, in bands of BAND_H of
+// its rows (whole steps of the scale: 16 rows make a whole number of panel rows)
+static void redraw43(int pw, int ph) {
+  const int px = (EMU_W - pw) / 2, py = (EMU_H - ph) / 2;
+  const float sx = q16((float)ASPECT_W / pw), sy = q16((float)OUT_H / ph);
+  const int ox = OUT_X + (OUT_W - (int)(pw * sx)) / 2 & ~7, oy = (OUT_H - (int)(ph * sy)) / 2 & ~7;
+  if (pw != g_box_w || ph != g_box_h || !g_bands_valid) {   // another picture: black around it
+    clear_pc_area();
+    g_box_w = pw, g_box_h = ph;
+    g_bands_valid = false;
+  }
+  const int nb = (ph + BAND_H - 1) / BAND_H;
+  int run = -1;
+  for (int b = 0; b <= nb; ++b) {
+    bool changed = false;
+    if (b < nb) {
+      const int y = py + b * BAND_H, n = min(BAND_H, py + ph - y);
+      const uint32_t h = t386_mix(0x811C9DC5u, g_emu_fb + y * EMU_W, n * EMU_W * 2);
+      changed = !g_bands_valid || h != g_band_hash[b];
+      g_band_hash[b] = h;
+    }
+    if (changed && run < 0) run = b;
+    if (!changed && run >= 0) {
+      const int y = run * BAND_H, n = min(b * BAND_H, ph) - y;
+      ppa_block(g_emu_fb, EMU_W, EMU_H, px, pw, py + y, n, sx, sy, ox, oy + (int)(y * sy));
+      g_stats.bands += b - run;
+      run = -1;
+    }
+  }
+  g_bands_valid = true;
+}
+
+static void redraw(void*, int, int, int, int) {
+  const int64_t t0 = esp_timer_get_time();
+  t386_msync(g_emu_fb, (size_t)EMU_W * EMU_H * 2, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+  int pw, ph;
+  if (g_aspect43 && t386_vga_picture(g_pc->vga, &pw, &ph) && pw <= EMU_W && ph <= EMU_H) {
+    redraw43(pw, ph);
+    ++g_stats.frames;
+    g_stats.ppa_us += esp_timer_get_time() - t0;
+    return;
+  }
+  int run = -1;   // first band of the current run of changed bands
+  for (int b = 0; b <= BANDS; ++b) {
+    bool changed = false;
+    if (b < BANDS) {
+      const uint32_t h = t386_mix(0x811C9DC5u, g_emu_fb + b * BAND_H * EMU_W, BAND_H * EMU_W * 2);
+      changed = !g_bands_valid || h != g_band_hash[b];
+      g_band_hash[b] = h;
+    }
+    if (changed && run < 0) run = b;
+    if (!changed && run >= 0) {
+      ppa_block(g_emu_fb, EMU_W, EMU_H, 0, EMU_W, run * BAND_H, (b - run) * BAND_H, SCALE, SCALE, OUT_X,
+                run * BAND_H * 3 / 2);   // (16 rows: 24 panel rows)
+      g_stats.bands += b - run;
+      run = -1;
+    }
+  }
+  g_bands_valid = true;
+  ++g_stats.frames;
+  g_stats.ppa_us += esp_timer_get_time() - t0;
+}
+
+// The 16- and 256-colour graphics modes: t386_vga_render_native draws the lines that changed at the mode's own size
+// into g_native_fb, and the PPA scales just those onto the middle of the PC's part of the panel, by 1.5 per dot
+// across and per scan line down (as tiny386's 720 x 480 picture would be): mode 13h and 0Dh by 3 (960 x 600), 12h by
+// 1.5 (960 x 720). The sound crackled while the PPA wrote the whole picture every frame (~1.2 MB, 28 times a second),
+// and again with runs of lines of any size and place; in groups making 24 panel lines it is clean.
+static constexpr int NATIVE_W = 720, NATIVE_H = 480;
+static uint16_t* g_native_fb;
+static uint8_t g_native_dirty[NATIVE_H];
+static T386Native g_native = {};   // what is on the panel (w 0: tiny386's whole picture is)
+static bool g_native_on = true;    // serial native 0|1: tiny386's renderer for every mode instead
+
 // The panel brought up to date with what t386_vga_render_native drew (n: its picture)
 static void show_native(const T386Native& n) {
   const int64_t t0 = esp_timer_get_time();
-  const float sx = 1.5f * n.dx, sy = 1.5f * n.ly;
+  float sx = 1.5f * n.dx, sy = 1.5f * n.ly;
+  if (g_aspect43) sx = q16((float)ASPECT_W / n.w), sy = q16((float)OUT_H / n.h);
   const int sw = (int)(n.w * sx), sh = (int)(n.h * sy);
   const int ox = OUT_X + (OUT_W - sw) / 2 & ~7, oy = (OUT_H - sh) / 2 & ~7;   // landscape
   if (n.w != g_native.w || n.h != g_native.h || n.dx != g_native.dx || n.ly != g_native.ly) {
-    // another shape: black around it (the panel is symmetric: either rotation puts landscape column x on panel
-    // row x and the picture's lines on panel columns oy .. oy + sh)
+    // another shape: black around it (landscape column x is panel row x, or 1279 - x upside down; the picture's
+    // lines are panel columns oy .. oy + sh, or 719 - their mirror)
+    const int c0 = g_rot == 1 ? FB_W - (oy + sh) : oy, c1 = c0 + sh;
     for (int r = OUT_X; r < OUT_X + OUT_W; ++r) {
       uint16_t* row = g_panel_fb + (size_t)FB_W * r;
-      if (r < ox || r >= ox + sw) {
+      const int x = g_rot == 1 ? r : FB_H - 1 - r;   // (OUT_X .. OUT_X + OUT_W is symmetric: both are in it)
+      if (x < ox || x >= ox + sw) {
         memset(row, 0, FB_W * 2);
       } else {
-        memset(row, 0, oy * 2);
-        memset(row + oy + sh, 0, (FB_W - oy - sh) * 2);
+        memset(row, 0, c0 * 2);
+        memset(row + c1, 0, (FB_W - c1) * 2);
       }
     }
     t386_msync(g_panel_fb + (size_t)FB_W * OUT_X, (size_t)FB_W * OUT_W * 2, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
@@ -317,16 +346,18 @@ static void show_native(const T386Native& n) {
   }
   g_native = n;
   t386_msync(g_native_fb, (size_t)n.w * n.h * 2, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
-  // runs of whole groups of lines that make 24 panel lines, as tiny386's 16-line bands do
-  const int step = 16 % n.ly ? 16 : 16 / n.ly;
+  // runs of whole groups of lines that make 24 panel lines, as tiny386's 16-line bands do (at 4:3: 16 lines, a whole
+  // number of panel lines)
+  const int step = g_aspect43 || 16 % n.ly ? 16 : 16 / n.ly;
+  g_box_w = 0;
   int run = -1, lines = 0;
-  for (int y = 0; y <= n.h; y += step) {
+  for (int y = 0; y < n.h + step; y += step) {   // (one more group, which only ends a run: a last part group too)
     bool changed = false;
     for (int i = y; i < y + step && i < n.h; ++i) changed |= g_native_dirty[i] != 0;
     if (changed && run < 0) run = y;
     if (!changed && run >= 0) {
       const int end = min(y, n.h);
-      ppa_native(run, end - run, sx, sy, ox, oy);
+      ppa_block(g_native_fb, n.w, n.h, 0, n.w, run, end - run, sx, sy, ox, oy + (int)(run * sy));
       lines += end - run;
       run = -1;
     }
@@ -492,6 +523,11 @@ static void handle_serial() {
       for (int i = 0; i < n; ++i) pc_key(true, lk(codes[i]));
       delay(50);
       for (int i = n - 1; i >= 0; --i) pc_key(false, lk(codes[i]));
+    } else if (line == "aspect 43" || line == "aspect square") {   // the picture's shape (g_aspect43)
+      g_aspect43 = line == "aspect 43";
+      g_prefs.putBool("aspect43", g_aspect43);
+      g_redraw_pc = true;
+      Serial.printf("aspect %s\n", g_aspect43 ? "4:3" : "square pixels");
     } else if (line == "native 0" || line == "native 1") {
       g_native_on = line == "native 1";
       Serial.printf("native renderer %s\n", g_native_on ? "on" : "off");
@@ -696,6 +732,7 @@ static void display_task(void*) {
       last_hash = 0;
       g_bands_valid = false;
       g_native.w = 0;
+      g_box_w = 0;
       last_refresh = 0;
       stopped_shown = false;
     }
@@ -835,6 +872,7 @@ void setup() {
 
   ui_setup();
   g_mouse_gain = g_prefs.getFloat("mouse", 1.0f);
+  g_aspect43 = g_prefs.getBool("aspect43", true);
   show_status("Tab5 PC", "Starting...");
   const bool have_sd = sd_mount();
   if (have_sd) Serial.printf("SD card: %llu MB\n", SD_MMC.cardSize() >> 20);

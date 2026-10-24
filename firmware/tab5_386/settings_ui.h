@@ -19,7 +19,7 @@ static int g_net_count = 0;
 static lv_display_t* g_disp;
 static lv_obj_t *ui_wifi, *ui_addr, *ui_pcstate, *ui_list, *ui_scan_lbl, *ui_pause_lbl, *ui_reset_lbl;
 static lv_obj_t *ui_modal, *ui_modal_title, *ui_ta_ssid, *ui_ta_pass, *ui_show_btn, *ui_msg, *ui_spinner, *ui_kb;
-static lv_obj_t *ui_connect_btn, *ui_bri, *ui_vol, *ui_mouse, *ui_wifi_sw, *ui_batt;
+static lv_obj_t *ui_connect_btn, *ui_bri, *ui_vol, *ui_mouse, *ui_wifi_sw, *ui_batt, *ui_aspect_sw;
 static lv_obj_t *ui_dc, *ui_fd, *ui_fd_msg, *ui_fd_bar, *ui_fd_btn, *ui_fd_iso;   // the sliders; or, the card empty, installing
                                                                     // FreeDOS (fd_install.h) in their place
 static bool g_scanning = false, g_connect_pending = false, g_touch_block = false;
@@ -123,7 +123,7 @@ static lv_obj_t* ui_slider(lv_obj_t* parent, const char* name, int y, int lo, in
   lv_slider_set_range(s, lo, hi);
   lv_obj_set_size(s, 200, 16);
   lv_obj_set_pos(s, 162, y + 4);
-  lv_obj_set_ext_click_area(s, 20);
+  lv_obj_set_ext_click_area(s, 12);   // (the sliders are 42 apart)
   lv_obj_add_event_cb(s, changed, LV_EVENT_VALUE_CHANGED, nullptr);
   return s;
 }
@@ -475,6 +475,7 @@ static void kbd_type_in_panel(KbdKey k) {
 // ---- panel --------------------------------------------------------------------------------------------------
 
 static bool g_redraw_pc = false;   // the PC's screen has to be drawn in full again (after the panel)
+static bool g_aspect43 = true;     // the PC's picture at 4:3 (else square pixels: the .ino, ASPECT_W)
 
 static void panel_close() {
   if (!g_panel_open) return;
@@ -495,6 +496,8 @@ static void panel_open() {
   lv_slider_set_value(ui_bri, g_brightness, LV_ANIM_OFF);
   lv_slider_set_value(ui_vol, g_volume, LV_ANIM_OFF);
   lv_slider_set_value(ui_mouse, (int)(g_mouse_gain * 10), LV_ANIM_OFF);
+  if (g_aspect43) lv_obj_add_state(ui_aspect_sw, LV_STATE_CHECKED);
+  else lv_obj_remove_state(ui_aspect_sw, LV_STATE_CHECKED);
   g_reset_armed = 0;
   ui_refresh_status();
   ui_fill_list();
@@ -591,17 +594,27 @@ static void ui_setup() {
 
   // screen, sound, touchpad
   lv_obj_t* dc = ui_card(scr, 32, 354, 410, 260);
-  ui_bri = ui_slider(dc, "Brightness", 4, 8, 255, [](lv_event_t*) { set_brightness(lv_slider_get_value(ui_bri)); });
-  ui_vol = ui_slider(dc, "Volume", 54, 0, 255, [](lv_event_t*) { set_volume(lv_slider_get_value(ui_vol)); });
-  ui_mouse = ui_slider(dc, "Touchpad", 104, 3, 40, [](lv_event_t*) {
+  ui_bri = ui_slider(dc, "Brightness", 0, 8, 255, [](lv_event_t*) { set_brightness(lv_slider_get_value(ui_bri)); });
+  ui_vol = ui_slider(dc, "Volume", 42, 0, 255, [](lv_event_t*) { set_volume(lv_slider_get_value(ui_vol)); });
+  ui_mouse = ui_slider(dc, "Touchpad", 84, 3, 40, [](lv_event_t*) {
     g_mouse_gain = lv_slider_get_value(ui_mouse) / 10.0f;
     g_prefs.putFloat("mouse", g_mouse_gain);
   });
-  lv_obj_t* hint = ui_label(dc, "This panel: swipe down from the top, Sym + Esc, or Scroll Lock (USB). "
-                                "Volume: Sym + Alt + Up / Down.", &lv_font_montserrat_20, C_DIM);
+  lv_obj_t* asp = ui_label(dc, "4:3 picture, as on a monitor", &lv_font_montserrat_20, C_INK);
+  lv_obj_set_pos(asp, 0, 132);
+  ui_aspect_sw = lv_switch_create(dc);   // off: square pixels (sharper, but text and 320 x 200 come out wide)
+  lv_obj_set_size(ui_aspect_sw, 76, 38);
+  lv_obj_set_pos(ui_aspect_sw, 290, 124);
+  lv_obj_set_style_bg_color(ui_aspect_sw, lv_color_hex(C_ACCENT), (lv_style_selector_t)LV_PART_INDICATOR | LV_STATE_CHECKED);
+  lv_obj_add_event_cb(ui_aspect_sw, [](lv_event_t*) {
+    g_aspect43 = lv_obj_has_state(ui_aspect_sw, LV_STATE_CHECKED);
+    g_prefs.putBool("aspect43", g_aspect43);   // (drawn so when the panel closes: g_redraw_pc)
+  }, LV_EVENT_VALUE_CHANGED, nullptr);
+  lv_obj_t* hint = ui_label(dc, "This panel: swipe down, Sym + Esc, Scroll Lock. Volume: Sym + Alt + Up/Down.",
+                            &lv_font_montserrat_20, C_DIM);
   lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
   lv_obj_set_width(hint, lv_pct(100));
-  lv_obj_set_pos(hint, 0, 152);
+  lv_obj_set_pos(hint, 0, 168);
 
   // an empty card: FreeDOS from freedos.org, in place of the sliders (fd_install.h; shown by ui_refresh_status)
   ui_dc = dc;

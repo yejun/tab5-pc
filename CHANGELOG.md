@@ -16,6 +16,10 @@
   destination (0014); 64-bit integers and 80-bit values copied through the FPU (FILD/FISTP, FLD/FSTP) lost bits
   beyond a double's 53 (0015).
 - The translator's description (README, `docs/NOTES.md`): it handles paged protected mode too.
+- The PC's picture at 4:3, as a monitor showed every mode (the default): text, 320 x 200 and 640 x 350 graphics fill
+  the panel's height like 640 x 480 (at most 960 x 720). A switch in the settings panel, or serial `aspect 43|square`,
+  goes back to square pixels. Fixed with it: the last lines of a picture whose height isn't a multiple of 16
+  (640 x 350) weren't redrawn, and the black around a picture was cleared on the wrong side upside down.
 - tiny386 at upstream 1a8f1e0 (was d81e225), which has the task-switch and timer-mode fixes (patch 0011 and
   `t386_pit_fix.h` dropped) and VGA, PS/2, ATAPI and floppy fixes; patches 0002, 0004 and 0007 rebased onto it.
 - Disk images that lie in pieces on the card (copied onto a card in use) are read and written as card sectors too,

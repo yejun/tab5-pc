@@ -16,6 +16,9 @@ extern "C" {
 #endif
 bool t386_vga_render_native(struct VGAState* s, uint16_t* dst, uint8_t* dirty, int max_w, int max_h, bool force,
                             T386Native* out);
+// The size of the picture tiny386's vga_refresh draws, centred in its frame buffer (text: the characters' dots;
+// graphics: after a refresh), or false
+bool t386_vga_picture(struct VGAState* s, int* w, int* h);
 #ifdef __cplusplus
 }
 #endif

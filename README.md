@@ -160,8 +160,9 @@ today's web needs HTTPS, which these programs don't do.
 ## Settings
 
 **The settings panel** (swipe down from the top edge, Sym + Esc, or Scroll Lock; Done or Esc closes it): pause or
-reset the PC (reset asks for a second tap), Wi-Fi for copying files and the network list, brightness, volume, and the
-touchpad's speed. The top right shows the battery. While the panel is open the PC keeps running.
+reset the PC (reset asks for a second tap), Wi-Fi for copying files and the network list, brightness, volume, the
+touchpad's speed, and the picture's shape: 4:3 as on a monitor (text and 320 x 200 graphics stretched to the full
+height, the default), or square pixels (sharper, wider). The top right shows the battery. While the panel is open the PC keeps running.
 
 ![The settings panel](docs/images/panel.png)
 
