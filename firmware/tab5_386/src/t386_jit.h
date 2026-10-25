@@ -5265,7 +5265,8 @@ void t386_jit_report(char *buf, int len)
 
 
 // With paging: the physical address of code at lin (through the fast path's TLB), or -1 (not mapped for this
-// privilege level, or not RAM: the interpreter, which faults or fetches it its way)
+// privilege level, or not RAM: the interpreter, which faults or fetches it its way; the TLB maps the linear frame
+// buffer too)
 static uword jit_code_phys(CPUI386 *cpu, uword lin)
 {
 	struct ftlb_entry *e = &ftlb[(lin >> 12) & (FTLB_N - 1)];
@@ -5277,7 +5278,8 @@ static uword jit_code_phys(CPUI386 *cpu, uword lin)
 		if (!h) return (uword) -1;
 		host = (uintptr_t) h;
 	}
-	return (uword) (host - (uintptr_t) cpu->phys_mem);
+	const uword pa = (uword) (host - (uintptr_t) cpu->phys_mem);
+	return pa < (uword) cpu->phys_mem_size ? pa : (uword) -1;
 }
 
 // the block whose code holds host address pc (blocks are made in the order of their code), or NULL

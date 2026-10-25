@@ -95,6 +95,9 @@ static CPUI386* t386_cpui386_new(int gen, char* phys_mem, long phys_mem_size, CP
     return cpu;
 }
 #define cpui386_new t386_cpui386_new
+// ... and the linear frame buffer's place, as pc.c's BAR callback maps it (t386_vga_fw.h)
+static void t386_set_pci_vga_bar(void* opaque, int bar_num, uint32_t addr, bool enabled);
+#define vga_pci_init(s, bus, opaque, f) vga_pci_init(s, bus, opaque, t386_set_pci_vga_bar)
 
 #define fprintf t386_fprintf
 #pragma GCC optimize("O3")
@@ -116,6 +119,14 @@ static bool t386_iomem_write_string(void* iomem, uword addr, uint8_t* buf, int l
     if (addr >= pc->pci_vga_ram_addr && len > 0) t386_vram_mark(addr - pc->pci_vga_ram_addr, len);
     else if (addr - 0xa0000 < 0x10000) t386_vga_written(addr - 0xa0000, len);   // (the window: VBE banks)
     return iomem_write_string(iomem, addr, buf, len);
+}
+static void t386_set_pci_vga_bar(void* opaque, int bar_num, uint32_t addr, bool enabled) {
+    PC* pc = opaque;
+    set_pci_vga_bar(opaque, bar_num, addr, enabled);
+    t386_lfb_size = 0;
+    t386_lfb_base = addr;
+    t386_lfb_ram = pc->vga_mem;
+    if (enabled) t386_lfb_size = pc->vga_mem_size;
 }
 void t386_lfb_hooks(void) {
     t386_cb->iomem_write8 = t386_iomem_write8;

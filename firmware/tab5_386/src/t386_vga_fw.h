@@ -10,6 +10,12 @@
 // interpreter all end in) and the 64 KB window's (t386_vga_write_fast, and vga.c's when it doesn't take them).
 extern uint8_t t386_vram_dirty[1024];
 extern int t386_vram_shift;
+
+// The linear frame buffer (BAR 0 of the PCI VGA) while it is mapped: its physical address and size, and its bytes
+// (tiny386's video memory); size 0: unmapped. The fast path maps its pages straight to them (t386_fast.h, ftlb_miss),
+// marking the pieces writes change. Set by pc.c's BAR callback (t386_pc.c).
+extern uint32_t t386_lfb_base, t386_lfb_size;
+extern uint8_t* t386_lfb_ram;
 static inline void t386_vram_mark(uint32_t off, uint32_t n) {
     const uint32_t last = (off + n - 1) >> t386_vram_shift;
     for (uint32_t i = off >> t386_vram_shift; i <= last && i < 1024; i++) t386_vram_dirty[i] = 1;

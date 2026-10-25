@@ -127,7 +127,11 @@ uint32_t t386_vbe_read(VGAState* s, uint32_t offset) {
 
 uint8_t t386_vram_dirty[1024];
 int t386_vram_shift = 11;
-static uint8_t nat_vram_seen[1024];   // t386_vram_dirty as the renderer took it (and cleared it)
+uint32_t t386_lfb_base, t386_lfb_size;
+uint8_t* t386_lfb_ram;
+// t386_vram_dirty as the renderer took it (and cleared it), this time and the time before: a piece is looked at in
+// both, as the fast path marks a write to the linear frame buffer just before it makes it (ftlb_miss)
+static uint8_t nat_vram_seen[1024], nat_vram_prev[1024];
 
 // t386_mix for a VBE mode's line (up to 4 KB, n a multiple of 4, at a multiple of 4): four words at a time, in
 // four lanes whose multiplies don't wait for each other
@@ -169,8 +173,14 @@ static bool nat_vbe(VGAState* s, uint16_t* dst, uint8_t* dirty, int max_w, int m
     // again: drawn the next time too); the lines in none of them are as they were
     uint32_t* dirty32 = (uint32_t*)t386_vram_dirty;
     uint32_t* seen32 = (uint32_t*)nat_vram_seen;
-    for (int i = 0; i < 1024 / 4; i++)
+    uint32_t* prev32 = (uint32_t*)nat_vram_prev;
+    uint32_t pieces[1024 / 4];   // this time's or the time before's
+    for (int i = 0; i < 1024 / 4; i++) {
+        prev32[i] = seen32[i];
         seen32[i] = dirty32[i] ? __atomic_exchange_n(&dirty32[i], 0, __ATOMIC_ACQ_REL) : 0;
+        pieces[i] = seen32[i] | prev32[i];
+    }
+    const uint8_t* written_pieces = (const uint8_t*)pieces;
     const bool all = force || params != nat_params;
     if (all) {
         for (int y = 0; y < h; y++) nat_row_hash[y] = ~0u;
@@ -185,7 +195,7 @@ static bool nat_vbe(VGAState* s, uint16_t* dst, uint8_t* dirty, int max_w, int m
         if (!all) {
             const uint32_t last = (addr + line_bytes - 1) >> t386_vram_shift;
             bool written = false;
-            for (uint32_t i = addr >> t386_vram_shift; i <= last && i < 1024; i++) written |= nat_vram_seen[i];
+            for (uint32_t i = addr >> t386_vram_shift; i <= last && i < 1024; i++) written |= written_pieces[i];
             if (!written) continue;
         }
         const bool in = addr < (uint32_t)s->vga_ram_size && line_bytes <= (uint32_t)s->vga_ram_size - addr;

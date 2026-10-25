@@ -914,7 +914,8 @@ void setup() {
   } else {
     g_native_fb = (uint16_t*)heap_caps_aligned_calloc(128, 1, NATIVE_W * NATIVE_H * 2, MALLOC_CAP_SPIRAM);
   }
-  Serial.printf("VBE modes up to %d x %d\n", g_native_w, g_native_h);
+  Serial.printf("VBE modes up to %d x %d (PSRAM free %u)\n", g_native_w, g_native_h,
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
   if (!g_vga_shadow) Serial.println("no memory for the video memory copy: the screen may tear");
   disk_raw_setup(g_conf);
   load_bios_and_reset(g_pc);

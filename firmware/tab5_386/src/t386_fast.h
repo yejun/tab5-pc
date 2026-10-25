@@ -111,9 +111,13 @@ static inline void ftlb_check(CPUI386 *cpu)
 		ftlb = ftlb_for(cpu);
 }
 
+// The linear frame buffer's pages are mapped straight to video memory like RAM, reads at RAM speed; writes go
+// through ftlb_miss (an entry with ctag), which marks the piece they change for the screen (t386_vga_fw.h).
+#include "t386_vga_fw.h"
+
 // The host address of a size-byte access at linear address lin, filling the TLB; NULL if tiny386 must do the
-// access: it is not to RAM (VGA memory and other MMIO), crosses a page, or faults (tiny386 raises the fault when
-// it redoes the instruction).
+// access: it is not to RAM (VGA memory and other MMIO; the linear frame buffer is, above), crosses a page, or faults
+// (tiny386 raises the fault when it redoes the instruction).
 static noinline u8 *ftlb_miss(CPUI386 *cpu, uword lin, int size, int write)
 {
 	if ((lin & 0xfff) > 0x1000 - size)
@@ -122,6 +126,10 @@ static noinline u8 *ftlb_miss(CPUI386 *cpu, uword lin, int size, int write)
 	struct ftlb_entry *e = &ftlb[pg & (FTLB_N - 1)];
 	if (write && e->ctag == pg && e->rtag == pg) {   // a page with translated code, written before
 		u8 *host = (u8 *) (uintptr_t) (lin + e->delta);
+		if ((uword) (host - t386_lfb_ram) < t386_lfb_size) {   // (the linear frame buffer)
+			t386_vram_mark(host - t386_lfb_ram, size);
+			return host;
+		}
 		uword paddr = host - cpu->phys_mem;
 		if (t386_pagemap[paddr >> 12] & 3)
 			t386_code_write(paddr, size);
@@ -136,6 +144,18 @@ static noinline u8 *ftlb_miss(CPUI386 *cpu, uword lin, int size, int write)
 		paddr &= ~0xfff;
 	} else {
 		paddr = pg << 12;
+	}
+	if (paddr - t386_lfb_base < t386_lfb_size) {
+		uintptr_t delta = (uintptr_t) t386_lfb_ram + (paddr - t386_lfb_base) - (pg << 12);
+		if (e->delta != delta || e->rtag != pg)
+			e->wtag = e->ctag = -1;
+		e->delta = delta;
+		e->rtag = pg;
+		if (write) {
+			e->ctag = pg;
+			t386_vram_mark(paddr - t386_lfb_base + (lin & 0xfff), size);
+		}
+		return (u8 *) (uintptr_t) (lin + delta);
 	}
 	if (in_iomem(paddr) || paddr >= (uword) cpu->phys_mem_size)
 		return NULL;
@@ -369,6 +389,8 @@ static noinline bool fast_window(CPUI386 *cpu, uword eip, const u8 **pc, const u
 			host = (u8 *) (uintptr_t) (lin + e->delta);
 		else if (!(host = ftlb_miss(cpu, lin, 1, 0)))
 			return false;
+		if ((uword) (host - cpu->phys_mem) >= (uword) cpu->phys_mem_size)
+			return false;   // (code in the linear frame buffer: tiny386)
 		start = host - (lin & 0xfff);
 		size = 4096;
 	} else {

@@ -38,6 +38,9 @@
   only those lines are read again: checking a still 1024 x 768 x 16 picture for changes takes 0.1 ms a frame instead
   of 15 ms.
 - The copy of video memory each tiny386 refresh reads is 256 KB, not all of it: 1.3 MB more memory free.
+- The linear frame buffer is mapped by the fast path's TLB straight to video memory, as RAM is: reads by translated
+  code and the fast path at RAM speed, writes without a page walk and tiny386's callbacks (still marked for the
+  screen). Its place comes from pc.c's BAR callback.
 
 ## 1.0.0 (2026-10-22)
 
