@@ -59,6 +59,7 @@ uint32_t t386_mix(uint32_t h, const void* p, size_t n);
 extern VGAState* t386_vga;   // the fast video memory paths (src/t386_vga_ext.h)
 void t386_vga_fw_update(void);
 void t386_lfb_hooks(void);
+extern int t386_ne2000_irq;
 }
 
 static constexpr const char* FIRMWARE_VERSION = "1.0.0";
@@ -808,6 +809,17 @@ static bool file_exists(const char* path) {
   return f != nullptr;
 }
 
+// [pc] ne2000_irq = <n>: the network card's interrupt, 9 unless set (tiny386's). Some NE2000 drivers don't work on 9
+// (the second interrupt controller's line that stands in for 2): 3, say, for them.
+static int ne2000_ini_handler(void*, const char* section, const char* name, const char* value) {
+  if (!strcmp(section, "pc") && !strcmp(name, "ne2000_irq")) {
+    const int irq = atoi(value);
+    if (irq == 3 || irq == 5 || irq == 7 || irq == 9 || irq == 10 || irq == 11 || irq == 15) t386_ne2000_irq = irq;
+    else Serial.printf("config: ne2000_irq = %s: not a free interrupt (3, 5, 7, 9, 10, 11, 15), 9 kept\n", value);
+  }
+  return 1;
+}
+
 static void load_config(PCConfig& conf, bool have_sd) {
   memset(&conf, 0, sizeof(conf));
   conf.mem_size = 16 * 1024 * 1024;
@@ -823,6 +835,8 @@ static void load_config(PCConfig& conf, bool have_sd) {
   }
   if (have_sd && ini_parse("/sdcard/tiny386.ini", parse_conf_ini, &conf) == 0) {
     Serial.println("config: /sdcard/tiny386.ini");
+    ini_parse("/sdcard/tiny386.ini", ne2000_ini_handler, nullptr);
+    if (t386_ne2000_irq != 9) Serial.printf("config: the network card on IRQ %d\n", t386_ne2000_irq);
   } else if (have_sd) {
     if (file_exists("/sdcard/hda.img")) conf.disks[0] = "/sdcard/hda.img";
     if (file_exists("/sdcard/cda.iso")) conf.disks[2] = "/sdcard/cda.iso", conf.iscd[2] = 1;

@@ -38,6 +38,8 @@
   only those lines are read again: checking a still 1024 x 768 x 16 picture for changes takes 0.1 ms a frame instead
   of 15 ms.
 - The copy of video memory each tiny386 refresh reads is 256 KB, not all of it: 1.3 MB more memory free.
+- tiny386.ini [pc] ne2000_irq: the network card's interrupt (9 unless set; 3, 5, 7, 10, 11 or 15). Some NE2000 drivers
+  don't work on 9, the second interrupt controller's line that stands in for 2.
 - The linear frame buffer is mapped by the fast path's TLB straight to video memory, as RAM is: reads by translated
   code and the fast path at RAM speed, writes without a page walk and tiny386's callbacks (still marked for the
   screen). Its place comes from pc.c's BAR callback.

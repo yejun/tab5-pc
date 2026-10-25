@@ -95,6 +95,10 @@ static CPUI386* t386_cpui386_new(int gen, char* phys_mem, long phys_mem_size, CP
     return cpu;
 }
 #define cpui386_new t386_cpui386_new
+// The network card's interrupt: 9 as tiny386 has it, or the ini's [pc] ne2000_irq (tab5_386.ino, load_config)
+#include "ne2000.h"
+int t386_ne2000_irq = 9;
+#define isa_ne2000_init(base, irq, pic, f) isa_ne2000_init(base, t386_ne2000_irq, pic, f)
 // ... and the linear frame buffer's place, as pc.c's BAR callback maps it (t386_vga_fw.h)
 static void t386_set_pci_vga_bar(void* opaque, int bar_num, uint32_t addr, bool enabled);
 #define vga_pci_init(s, bus, opaque, f) vga_pci_init(s, bus, opaque, t386_set_pci_vga_bar)
