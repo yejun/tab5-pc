@@ -4,11 +4,16 @@
 // keeps running (sound plays) but its screen isn't drawn, touches go to the panel, and keys type into it.
 // LVGL only runs on the core-0 task, and only while the panel is open; it draws into strips that the PPA rotates
 // into the panel's frame buffer.
+// The look: a BIOS setup screen at today's resolution. VGA-style blue, frames of two 3-pixel rules with their names
+// on the top rule, cyan bars for buttons and the key help at the bottom, and a pixel font (UNSCII 8, its pixels
+// drawn 2 x 3 and 3 x 4 like a text mode's on a 4:3 monitor: src/px_fonts.c, tools/fonts/px_fonts.py).
 #pragma once
 #include <lvgl.h>
 
-static constexpr uint32_t C_BG = 0x11141c, C_CARD = 0x1a1f2b, C_LINE = 0x2a3142, C_INK = 0xe8e4da, C_DIM = 0x8b93a7,
-                          C_ACCENT = 0x5ae2c7, C_WARN = 0xf0a868;
+extern "C" const lv_font_t px_font_24, px_font_32;   // (16 x 24 and 24 x 32 cells)
+static constexpr uint32_t C_BG = 0x0c1d9a, C_CARD = 0x0c1d9a, C_LINE = 0xe9e6d6, C_INK = 0xe9e6d6, C_DIM = 0x61e2e8,
+                          C_ACCENT = 0xfff35c, C_WARN = 0xff7a6e, C_DEEP = 0x06104f, C_BAR = 0x2fbcc6, C_BLACK = 0x04060e,
+                          C_KEY = 0xb9b7ad;
 static constexpr int MAX_NETS = 24;
 static constexpr int64_t RESET_CONFIRM_MS = 3000;
 
@@ -20,7 +25,7 @@ static lv_display_t* g_disp;
 static lv_obj_t *ui_wifi, *ui_addr, *ui_pcstate, *ui_list, *ui_scan_lbl, *ui_pause_lbl, *ui_reset_lbl;
 static lv_obj_t *ui_modal, *ui_modal_title, *ui_ta_ssid, *ui_ta_pass, *ui_show_btn, *ui_msg, *ui_spinner, *ui_kb;
 static lv_obj_t *ui_connect_btn, *ui_bri, *ui_vol, *ui_mouse, *ui_wifi_sw, *ui_batt, *ui_aspect_sw;
-static lv_obj_t *ui_dc, *ui_fd, *ui_fd_msg, *ui_fd_bar, *ui_fd_btn, *ui_fd_iso;   // the sliders; or, the card empty, installing
+static lv_obj_t *ui_dc, *ui_fd, *ui_fd_msg, *ui_fd_bar, *ui_fd_btn, *ui_fd_iso, *ui_dc_cap, *ui_fd_cap;   // the sliders; or, the card empty, installing
                                                                     // FreeDOS (fd_install.h) in their place
 static bool g_scanning = false, g_connect_pending = false, g_touch_block = false;
 static int64_t g_reset_armed = 0;   // "Reset PC" tapped once at this time: a second tap within RESET_CONFIRM_MS resets
@@ -89,12 +94,28 @@ static lv_obj_t* ui_card(lv_obj_t* parent, int x, int y, int w, int h) {
   lv_obj_set_pos(o, x, y);
   lv_obj_set_size(o, w, h);
   lv_obj_set_style_bg_color(o, lv_color_hex(C_CARD), 0);
-  lv_obj_set_style_border_color(o, lv_color_hex(C_LINE), 0);
-  lv_obj_set_style_border_width(o, 1, 0);
-  lv_obj_set_style_radius(o, 20, 0);
+  lv_obj_set_style_border_color(o, lv_color_hex(C_LINE), 0);   // the double rule: the border, and an outline outside it
+  lv_obj_set_style_border_width(o, 3, 0);
+  lv_obj_set_style_outline_color(o, lv_color_hex(C_LINE), 0);
+  lv_obj_set_style_outline_width(o, 3, 0);
+  lv_obj_set_style_outline_pad(o, 3, 0);
+  lv_obj_set_style_radius(o, 0, 0);
   lv_obj_set_style_pad_all(o, 22, 0);
   lv_obj_remove_flag(o, LV_OBJ_FLAG_SCROLLABLE);
   return o;
+}
+
+// A frame's name, on its top rule (centred over a frame from x to x + w, its rule at y), on the screen
+static lv_obj_t* ui_caption(lv_obj_t* scr, const char* text, int x, int y, int w) {
+  lv_obj_t* l = lv_label_create(scr);
+  lv_label_set_text_fmt(l, " %s ", text);
+  lv_obj_set_style_text_font(l, &px_font_24, 0);
+  lv_obj_set_style_text_color(l, lv_color_hex(C_INK), 0);
+  lv_obj_set_style_bg_color(l, lv_color_hex(C_BG), 0);
+  lv_obj_set_style_bg_opa(l, LV_OPA_COVER, 0);
+  lv_obj_update_layout(l);
+  lv_obj_set_pos(l, x + (w - lv_obj_get_width(l)) / 2, y - 14);
+  return l;
 }
 
 static lv_obj_t* ui_label(lv_obj_t* parent, const char* text, const lv_font_t* font, uint32_t color) {
@@ -107,25 +128,51 @@ static lv_obj_t* ui_label(lv_obj_t* parent, const char* text, const lv_font_t* f
 
 static lv_obj_t* ui_button(lv_obj_t* parent, const char* text, lv_event_cb_t cb, bool primary) {
   lv_obj_t* b = lv_button_create(parent);
-  lv_obj_set_style_bg_color(b, lv_color_hex(primary ? C_ACCENT : C_LINE), 0);
-  lv_obj_set_style_radius(b, 16, 0);
+  lv_obj_set_style_bg_color(b, lv_color_hex(primary ? C_ACCENT : C_BAR), 0);
+  lv_obj_set_style_bg_color(b, lv_color_hex(C_INK), LV_STATE_PRESSED);
+  lv_obj_set_style_radius(b, 0, 0);
   lv_obj_set_style_shadow_width(b, 0, 0);
-  lv_obj_t* l = ui_label(b, text, &lv_font_montserrat_20, primary ? C_BG : C_INK);
+  lv_obj_t* l = ui_label(b, text, &px_font_24, C_BLACK);
   lv_obj_center(l);
   lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, nullptr);
   return b;
 }
 
 static lv_obj_t* ui_slider(lv_obj_t* parent, const char* name, int y, int lo, int hi, lv_event_cb_t changed) {
-  lv_obj_t* l = ui_label(parent, name, &lv_font_montserrat_20, C_INK);
+  lv_obj_t* l = ui_label(parent, name, &px_font_24, C_INK);
   lv_obj_set_pos(l, 0, y);
   lv_obj_t* s = lv_slider_create(parent);
   lv_slider_set_range(s, lo, hi);
-  lv_obj_set_size(s, 200, 16);
-  lv_obj_set_pos(s, 162, y + 4);
-  lv_obj_set_ext_click_area(s, 12);   // (the sliders are 42 apart)
+  lv_obj_set_size(s, 300, 20);
+  lv_obj_set_pos(s, 190, y + 2);
+  lv_obj_set_ext_click_area(s, 12);   // (the sliders are 44 apart)
+  lv_obj_set_style_radius(s, 0, LV_PART_MAIN);   // a bar in a box, a square knob
+  lv_obj_set_style_radius(s, 0, LV_PART_INDICATOR);
+  lv_obj_set_style_radius(s, 0, LV_PART_KNOB);
+  lv_obj_set_style_bg_color(s, lv_color_hex(C_DEEP), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(s, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_border_color(s, lv_color_hex(C_LINE), LV_PART_MAIN);
+  lv_obj_set_style_border_width(s, 2, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(s, lv_color_hex(C_ACCENT), LV_PART_INDICATOR);
+  lv_obj_set_style_bg_color(s, lv_color_hex(C_INK), LV_PART_KNOB);
+  lv_obj_set_style_pad_all(s, 6, LV_PART_KNOB);
   lv_obj_add_event_cb(s, changed, LV_EVENT_VALUE_CHANGED, nullptr);
   return s;
+}
+
+// A square on/off switch: a box with a block that moves
+static void ui_switch_style(lv_obj_t* sw) {
+  lv_obj_set_size(sw, 80, 36);
+  lv_obj_set_style_radius(sw, 0, LV_PART_MAIN);
+  lv_obj_set_style_radius(sw, 0, LV_PART_INDICATOR);
+  lv_obj_set_style_radius(sw, 0, LV_PART_KNOB);
+  lv_obj_set_style_bg_color(sw, lv_color_hex(C_DEEP), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(sw, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_border_color(sw, lv_color_hex(C_LINE), LV_PART_MAIN);
+  lv_obj_set_style_border_width(sw, 2, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(sw, lv_color_hex(C_BAR), (lv_style_selector_t)LV_PART_INDICATOR | LV_STATE_CHECKED);
+  lv_obj_set_style_bg_color(sw, lv_color_hex(C_INK), LV_PART_KNOB);
+  lv_obj_set_style_pad_all(sw, -5, LV_PART_KNOB);
 }
 
 // ---- status -------------------------------------------------------------------------------------------------
@@ -147,7 +194,7 @@ static void ui_refresh_status() {
   lv_label_set_text(ui_pause_lbl, g_user_pause ? LV_SYMBOL_PLAY "  Resume" : LV_SYMBOL_PAUSE "  Pause");
   const bool armed = g_reset_armed && esp_timer_get_time() / 1000 - g_reset_armed < RESET_CONFIRM_MS;
   if (!armed) g_reset_armed = 0;
-  lv_label_set_text(ui_reset_lbl, g_pc_stopped ? LV_SYMBOL_PLAY "  Start PC" : armed ? "Tap again to reset" : LV_SYMBOL_REFRESH "  Reset PC");
+  lv_label_set_text(ui_reset_lbl, g_pc_stopped ? LV_SYMBOL_PLAY "  Start PC" : armed ? "Tap to confirm" : LV_SYMBOL_REFRESH "  Reset PC");
   if (g_pc_stopped) {   // Start PC alone, where Pause was
     lv_obj_add_flag(lv_obj_get_parent(ui_pause_lbl), LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_pos(lv_obj_get_parent(ui_reset_lbl), 0, 36);
@@ -156,10 +203,12 @@ static void ui_refresh_status() {
   battery_text(batt, sizeof(batt));
   if (strcmp(lv_label_get_text(ui_batt), batt)) lv_label_set_text(ui_batt, batt);
   const bool low = g_batt.presence.state == BatteryPresence::Present && g_batt.level <= 15 && !g_batt.external;
-  lv_obj_set_style_text_color(ui_batt, lv_color_hex(low ? C_WARN : C_INK), 0);
+  lv_obj_set_style_text_color(ui_batt, lv_color_hex(low ? 0x8a1208 : C_BLACK), 0);   // (on the title bar)
   if (g_setup_needed) {   // (known after the panel is made: load_config)
     lv_obj_add_flag(ui_dc, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(ui_dc_cap, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(ui_fd, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(ui_fd_cap, LV_OBJ_FLAG_HIDDEN);
     const bool running = g_fd_state == FD_RUNNING, up = g_wifi == WIFI_UP;
     static char iso_msg[200];
     snprintf(iso_msg, sizeof(iso_msg), "No PC disks on the card yet. Install FreeDOS 1.4 (downloaded, 18 MB), or "
@@ -177,7 +226,7 @@ static void ui_refresh_status() {
     if (up && !running) lv_obj_remove_state(ui_fd_btn, LV_STATE_DISABLED);
     else lv_obj_add_state(ui_fd_btn, LV_STATE_DISABLED);
     if (g_fd_iso[0]) {   // two buttons side by side: the download, and the CD image
-      lv_obj_set_width(ui_fd_btn, 140);
+      lv_obj_set_width(ui_fd_btn, 220);
       lv_label_set_text(lv_obj_get_child(ui_fd_btn, 0), LV_SYMBOL_DOWNLOAD "  FreeDOS");
       lv_obj_remove_flag(ui_fd_iso, LV_OBJ_FLAG_HIDDEN);
       lv_label_set_text_fmt(lv_obj_get_child(ui_fd_iso, 0), LV_SYMBOL_DRIVE "  %s", g_fd_iso);
@@ -201,6 +250,18 @@ static void net_clicked(lv_event_t* e) {
   else ui_show_modal(g_nets[i].ssid, g_nets[i].secure);
 }
 
+// A row of the network list: a selection bar when pressed, as in a setup program's menus
+static void ui_list_row(lv_obj_t* b, uint32_t color) {
+  lv_obj_set_height(b, 58);
+  lv_obj_set_style_bg_color(b, lv_color_hex(C_CARD), 0);
+  lv_obj_set_style_bg_color(b, lv_color_hex(C_BAR), LV_STATE_PRESSED);
+  lv_obj_set_style_text_color(b, lv_color_hex(color), 0);
+  lv_obj_set_style_text_color(b, lv_color_hex(C_BLACK), LV_STATE_PRESSED);
+  lv_obj_set_style_text_font(b, &px_font_24, 0);
+  lv_obj_set_style_border_color(b, lv_color_hex(C_DEEP), 0);
+  lv_obj_set_style_radius(b, 0, 0);
+}
+
 static void ui_fill_list() {
   lv_obj_clean(ui_list);
   if (g_wifi == WIFI_DISABLED) return;
@@ -208,18 +269,16 @@ static void ui_fill_list() {
     const Net& n = g_nets[i];
     const bool current = g_wifi == WIFI_UP && g_ssid == n.ssid;
     lv_obj_t* b = lv_list_add_button(ui_list, current ? LV_SYMBOL_OK : LV_SYMBOL_WIFI, n.ssid);
-    lv_obj_set_height(b, 64);
-    lv_obj_set_style_bg_color(b, lv_color_hex(C_CARD), 0);
-    lv_obj_set_style_text_color(b, lv_color_hex(current ? C_ACCENT : C_INK), 0);
-    lv_obj_set_style_border_color(b, lv_color_hex(C_LINE), 0);
-    lv_obj_t* info = ui_label(b, "", &lv_font_montserrat_20, C_DIM);
+    ui_list_row(b, current ? C_ACCENT : C_DIM);
+    lv_obj_t* name = lv_obj_get_child(b, 1);   // (the icon, the name: a long one ends in "...")
+    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+    lv_obj_set_flex_grow(name, 1);
+    lv_obj_t* info = ui_label(b, "", &px_font_24, C_INK);
     lv_label_set_text_fmt(info, "%s, %s", signal_word(n.rssi), n.secure ? "secured" : "open");
     lv_obj_add_event_cb(b, net_clicked, LV_EVENT_CLICKED, (void*)(intptr_t)i);
   }
   lv_obj_t* other = lv_list_add_button(ui_list, LV_SYMBOL_PLUS, "Other network ...");
-  lv_obj_set_height(other, 64);
-  lv_obj_set_style_bg_color(other, lv_color_hex(C_CARD), 0);
-  lv_obj_set_style_text_color(other, lv_color_hex(C_DIM), 0);
+  ui_list_row(other, C_INK);
   lv_obj_add_event_cb(other, net_clicked, LV_EVENT_CLICKED, (void*)(intptr_t)-1);
 }
 
@@ -325,11 +384,15 @@ static lv_obj_t* ui_textarea(lv_obj_t* parent, const char* placeholder) {
   lv_textarea_set_one_line(ta, true);
   lv_textarea_set_placeholder_text(ta, placeholder);
   lv_obj_set_width(ta, lv_pct(100));
-  lv_obj_set_style_text_font(ta, &lv_font_montserrat_28, 0);
-  lv_obj_set_style_bg_color(ta, lv_color_hex(C_BG), 0);
+  lv_obj_set_style_text_font(ta, &px_font_32, 0);
+  lv_obj_set_style_bg_color(ta, lv_color_hex(C_DEEP), 0);
   lv_obj_set_style_text_color(ta, lv_color_hex(C_INK), 0);
   lv_obj_set_style_border_color(ta, lv_color_hex(C_LINE), 0);
+  lv_obj_set_style_border_width(ta, 2, 0);
+  lv_obj_set_style_radius(ta, 0, 0);
   lv_obj_set_style_border_color(ta, lv_color_hex(C_ACCENT), LV_STATE_FOCUSED);
+  lv_obj_set_style_text_color(ta, lv_color_hex(C_DIM), LV_PART_TEXTAREA_PLACEHOLDER);
+  lv_obj_set_style_bg_color(ta, lv_color_hex(C_ACCENT), LV_PART_CURSOR);   // (a block cursor's colour)
   lv_obj_add_event_cb(ta, [](lv_event_t* e) {   // the keyboard types into whichever field was tapped
     lv_obj_t* t = (lv_obj_t*)lv_event_get_target(e);
     lv_keyboard_set_textarea(ui_kb, t);
@@ -375,7 +438,12 @@ static void ui_build_modal(lv_obj_t* scr) {
   lv_obj_t* box = ui_card(ui_modal, 240, 24, 800, 340);
   lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_row(box, 14, 0);
-  ui_modal_title = ui_label(box, "", &lv_font_montserrat_28, C_INK);
+  lv_obj_set_style_shadow_width(box, 1, 0);   // a hard shadow, as a dialog box had
+  lv_obj_set_style_shadow_offset_x(box, 16, 0);
+  lv_obj_set_style_shadow_offset_y(box, 16, 0);
+  lv_obj_set_style_shadow_color(box, lv_color_hex(0x000000), 0);
+  lv_obj_set_style_shadow_opa(box, LV_OPA_60, 0);
+  ui_modal_title = ui_label(box, "", &px_font_32, C_ACCENT);
   ui_ta_ssid = ui_textarea(box, "Network name");
   lv_obj_t* row = lv_obj_create(box);       // password field + Show
   lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
@@ -406,9 +474,11 @@ static void ui_build_modal(lv_obj_t* scr) {
   lv_obj_set_size(ui_spinner, 32, 32);
   lv_obj_align(ui_spinner, LV_ALIGN_LEFT_MID, 0, 0);
   lv_obj_set_style_arc_color(ui_spinner, lv_color_hex(C_ACCENT), LV_PART_INDICATOR);
+  lv_obj_set_style_arc_color(ui_spinner, lv_color_hex(C_DEEP), 0);
+  lv_obj_set_style_arc_rounded(ui_spinner, false, LV_PART_INDICATOR);
   lv_obj_set_style_arc_width(ui_spinner, 5, LV_PART_INDICATOR);
   lv_obj_set_style_arc_width(ui_spinner, 5, 0);
-  ui_msg = ui_label(msg_row, "", &lv_font_montserrat_20, C_DIM);
+  ui_msg = ui_label(msg_row, "", &px_font_24, C_DIM);
   lv_obj_align(ui_msg, LV_ALIGN_LEFT_MID, 44, 0);
 
   lv_obj_t* buttons = lv_obj_create(box);
@@ -427,7 +497,16 @@ static void ui_build_modal(lv_obj_t* scr) {
   ui_kb = lv_keyboard_create(ui_modal);
   lv_obj_set_size(ui_kb, SCR_W, 300);
   lv_obj_align(ui_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
-  lv_obj_set_style_text_font(ui_kb, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_font(ui_kb, &px_font_32, 0);   // keycaps: grey, the function keys cyan, yellow when pressed
+  lv_obj_set_style_bg_color(ui_kb, lv_color_hex(C_DEEP), 0);
+  lv_obj_set_style_radius(ui_kb, 0, 0);
+  lv_obj_set_style_radius(ui_kb, 0, LV_PART_ITEMS);
+  lv_obj_set_style_bg_color(ui_kb, lv_color_hex(C_KEY), LV_PART_ITEMS);
+  lv_obj_set_style_text_color(ui_kb, lv_color_hex(C_BLACK), LV_PART_ITEMS);
+  lv_obj_set_style_shadow_width(ui_kb, 0, LV_PART_ITEMS);
+  lv_obj_set_style_bg_color(ui_kb, lv_color_hex(C_BAR), (lv_style_selector_t)LV_PART_ITEMS | LV_STATE_CHECKED);
+  lv_obj_set_style_text_color(ui_kb, lv_color_hex(C_BLACK), (lv_style_selector_t)LV_PART_ITEMS | LV_STATE_CHECKED);
+  lv_obj_set_style_bg_color(ui_kb, lv_color_hex(C_ACCENT), (lv_style_selector_t)LV_PART_ITEMS | LV_STATE_PRESSED);
   lv_keyboard_set_map(ui_kb, LV_KEYBOARD_MODE_TEXT_LOWER, kb_lower, kb_ctrl);
   lv_keyboard_set_map(ui_kb, LV_KEYBOARD_MODE_TEXT_UPPER, kb_upper, kb_ctrl);
   lv_obj_add_event_cb(ui_kb, [](lv_event_t*) { ui_connect(); }, LV_EVENT_READY, nullptr);       // the keyboard's OK key
@@ -530,7 +609,7 @@ static void ui_setup() {
   const size_t buf = SCR_W * 80 * 2;
   lv_display_set_buffers(g_disp, ui_alloc(buf), ui_alloc(buf), buf, LV_DISPLAY_RENDER_MODE_PARTIAL);
   lv_display_set_theme(g_disp, lv_theme_default_init(g_disp, lv_color_hex(C_ACCENT), lv_color_hex(C_DIM), true,
-                                                      &lv_font_montserrat_20));
+                                                      &px_font_24));
   lv_indev_t* indev = lv_indev_create();
   lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
   lv_indev_set_read_cb(indev, ui_touch);
@@ -538,23 +617,45 @@ static void ui_setup() {
   lv_obj_t* scr = lv_screen_active();
   lv_obj_set_style_bg_color(scr, lv_color_hex(C_BG), 0);
   lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_t* title = ui_label(scr, "Settings", &lv_font_montserrat_28, C_INK);
-  lv_obj_set_pos(title, 34, 28);
-  lv_obj_t* sub = ui_label(scr, "", &lv_font_montserrat_20, C_DIM);
-  lv_label_set_text_fmt(sub, "Tab5 PC %s", FIRMWARE_VERSION);
-  lv_obj_set_pos(sub, 180, 34);
-  ui_batt = ui_label(scr, "", &lv_font_montserrat_20, C_INK);   // top right, like a status bar
-  lv_obj_set_width(ui_batt, 782);
+  // the title bar: name and version, and the battery on the right, like a setup program's
+  lv_obj_t* top = lv_obj_create(scr);
+  lv_obj_set_pos(top, 0, 0);
+  lv_obj_set_size(top, SCR_W, 56);
+  lv_obj_set_style_bg_color(top, lv_color_hex(C_BAR), 0);
+  lv_obj_set_style_border_width(top, 0, 0);
+  lv_obj_set_style_radius(top, 0, 0);
+  lv_obj_set_style_pad_all(top, 0, 0);
+  lv_obj_remove_flag(top, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_t* title = ui_label(top, "TAB5 PC SETUP", &px_font_32, C_BLACK);
+  lv_obj_set_pos(title, 30, 12);
+  lv_obj_t* sub = ui_label(top, "", &px_font_24, C_DEEP);
+  lv_label_set_text_fmt(sub, "v%s", FIRMWARE_VERSION);
+  lv_obj_set_pos(sub, 380, 18);
+  ui_batt = ui_label(top, "", &px_font_24, C_BLACK);
+  lv_obj_set_width(ui_batt, 700);
   lv_obj_set_style_text_align(ui_batt, LV_TEXT_ALIGN_RIGHT, 0);
-  lv_obj_set_pos(ui_batt, 466, 34);
+  lv_obj_set_pos(ui_batt, SCR_W - 30 - 700, 18);
+  // the keys, at the bottom like a setup program's help line
+  lv_obj_t* help = lv_obj_create(scr);
+  lv_obj_set_pos(help, 0, SCR_H - 38);
+  lv_obj_set_size(help, SCR_W, 38);
+  lv_obj_set_style_bg_color(help, lv_color_hex(C_BAR), 0);
+  lv_obj_set_style_border_width(help, 0, 0);
+  lv_obj_set_style_radius(help, 0, 0);
+  lv_obj_set_style_pad_all(help, 0, 0);
+  lv_obj_remove_flag(help, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_t* keys = ui_label(help, "This panel: swipe down, Sym+Esc, Scroll Lock     Volume: Sym+Alt+Up/Down",
+                            &px_font_24, C_BLACK);
+  lv_obj_set_pos(keys, 30, 7);
 
+  constexpr int LX = 30, LW = 540, RX = 600, RW = 650, TOP = 86;
   // the PC, and where to copy files to it
-  lv_obj_t* st = ui_card(scr, 32, 80, 410, 262);
-  ui_label(st, "PC", &lv_font_montserrat_20, C_DIM);
-  ui_pcstate = ui_label(st, "", &lv_font_montserrat_20, C_INK);
-  lv_obj_set_pos(ui_pcstate, 50, 0);
+  lv_obj_t* st = ui_card(scr, LX, TOP, LW, 272);
+  ui_label(st, "State", &px_font_24, C_DIM);
+  ui_pcstate = ui_label(st, "", &px_font_24, C_ACCENT);
+  lv_obj_set_pos(ui_pcstate, 110, 0);
   lv_obj_t* pause = ui_button(st, "", [](lv_event_t*) { pc_set_paused(!g_user_pause); ui_refresh_status(); }, false);
-  lv_obj_set_size(pause, 170, 56);
+  lv_obj_set_size(pause, 200, 52);
   lv_obj_set_pos(pause, 0, 36);
   ui_pause_lbl = lv_obj_get_child(pause, 0);
   lv_obj_t* reset = ui_button(st, "", [](lv_event_t*) {   // two taps: a stray one can't lose the user's work
@@ -570,106 +671,107 @@ static void ui_setup() {
     }
     if (g_panel_open) ui_refresh_status();
   }, false);
-  lv_obj_set_size(reset, 186, 56);
-  lv_obj_set_pos(reset, 180, 36);
+  lv_obj_set_size(reset, 280, 52);
+  lv_obj_set_pos(reset, 210, 36);
   ui_reset_lbl = lv_obj_get_child(reset, 0);
-  lv_obj_t* h2 = ui_label(st, "COPY FILES: WI-FI", &lv_font_montserrat_20, C_DIM);
+  lv_obj_t* h2 = ui_label(st, "Copy files over Wi-Fi", &px_font_24, C_DIM);
   lv_obj_set_pos(h2, 0, 112);
   ui_wifi_sw = lv_switch_create(st);   // WiFi only runs for copying files
-  lv_obj_set_size(ui_wifi_sw, 76, 38);
-  lv_obj_set_pos(ui_wifi_sw, 290, 104);
-  lv_obj_set_style_bg_color(ui_wifi_sw, lv_color_hex(C_ACCENT), (lv_style_selector_t)LV_PART_INDICATOR | LV_STATE_CHECKED);
+  ui_switch_style(ui_wifi_sw);
+  lv_obj_set_pos(ui_wifi_sw, LW - 50 - 80, 104);   // (inside: the frame's 3 and the 22 each side)
   lv_obj_add_event_cb(ui_wifi_sw, [](lv_event_t*) {
     const bool on = lv_obj_has_state(ui_wifi_sw, LV_STATE_CHECKED);
     wifi_enable(on);
     ui_refresh_status();
     ui_start_scan();
   }, LV_EVENT_VALUE_CHANGED, nullptr);
-  ui_addr = ui_label(st, "", &lv_font_montserrat_28, C_ACCENT);
-  lv_obj_set_pos(ui_addr, 0, 140);
-  ui_wifi = ui_label(st, "", &lv_font_montserrat_20, C_INK);
-  lv_label_set_long_mode(ui_wifi, LV_LABEL_LONG_DOT);
+  ui_addr = ui_label(st, "", &px_font_24, C_ACCENT);
+  lv_obj_set_pos(ui_addr, 0, 150);
+  ui_wifi = ui_label(st, "", &px_font_24, C_INK);
+  lv_label_set_long_mode(ui_wifi, LV_LABEL_LONG_WRAP);
   lv_obj_set_width(ui_wifi, lv_pct(100));
-  lv_obj_set_pos(ui_wifi, 0, 184);
+  lv_obj_set_pos(ui_wifi, 0, 180);
+  ui_caption(scr, "PC", LX, TOP, LW);
 
   // screen, sound, touchpad
-  lv_obj_t* dc = ui_card(scr, 32, 354, 410, 260);
+  constexpr int DY = TOP + 272 + 24;
+  lv_obj_t* dc = ui_card(scr, LX, DY, LW, 222);
   ui_bri = ui_slider(dc, "Brightness", 0, 8, 255, [](lv_event_t*) { set_brightness(lv_slider_get_value(ui_bri)); });
-  ui_vol = ui_slider(dc, "Volume", 42, 0, 255, [](lv_event_t*) { set_volume(lv_slider_get_value(ui_vol)); });
-  ui_mouse = ui_slider(dc, "Touchpad", 84, 3, 40, [](lv_event_t*) {
+  ui_vol = ui_slider(dc, "Volume", 44, 0, 255, [](lv_event_t*) { set_volume(lv_slider_get_value(ui_vol)); });
+  ui_mouse = ui_slider(dc, "Touchpad", 88, 3, 40, [](lv_event_t*) {
     g_mouse_gain = lv_slider_get_value(ui_mouse) / 10.0f;
     g_prefs.putFloat("mouse", g_mouse_gain);
   });
-  lv_obj_t* asp = ui_label(dc, "4:3 picture, as on a monitor", &lv_font_montserrat_20, C_INK);
-  lv_obj_set_pos(asp, 0, 132);
+  lv_obj_t* asp = ui_label(dc, "4:3 picture, as a monitor", &px_font_24, C_INK);
+  lv_obj_set_pos(asp, 0, 138);
   ui_aspect_sw = lv_switch_create(dc);   // off: square pixels (sharper, but text and 320 x 200 come out wide)
-  lv_obj_set_size(ui_aspect_sw, 76, 38);
-  lv_obj_set_pos(ui_aspect_sw, 290, 124);
-  lv_obj_set_style_bg_color(ui_aspect_sw, lv_color_hex(C_ACCENT), (lv_style_selector_t)LV_PART_INDICATOR | LV_STATE_CHECKED);
+  ui_switch_style(ui_aspect_sw);
+  lv_obj_set_pos(ui_aspect_sw, LW - 50 - 80, 130);
   lv_obj_add_event_cb(ui_aspect_sw, [](lv_event_t*) {
     g_aspect43 = lv_obj_has_state(ui_aspect_sw, LV_STATE_CHECKED);
     g_prefs.putBool("aspect43", g_aspect43);   // (drawn so when the panel closes: g_redraw_pc)
   }, LV_EVENT_VALUE_CHANGED, nullptr);
-  lv_obj_t* hint = ui_label(dc, "This panel: swipe down, Sym + Esc, Scroll Lock. Volume: Sym + Alt + Up/Down.",
-                            &lv_font_montserrat_20, C_DIM);
-  lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
-  lv_obj_set_width(hint, lv_pct(100));
-  lv_obj_set_pos(hint, 0, 168);
+  lv_obj_t* dc_cap = ui_caption(scr, "Screen, sound, touchpad", LX, DY, LW);
 
   // an empty card: FreeDOS from freedos.org, in place of the sliders (fd_install.h; shown by ui_refresh_status)
   ui_dc = dc;
+  ui_dc_cap = dc_cap;
   {
-    ui_fd = ui_card(scr, 32, 354, 410, 260);
+    ui_fd = ui_card(scr, LX, DY, LW, 222);
     lv_obj_add_flag(ui_fd, LV_OBJ_FLAG_HIDDEN);
-    ui_label(ui_fd, "FreeDOS", &lv_font_montserrat_28, C_INK);
-    ui_fd_msg = ui_label(ui_fd, "", &lv_font_montserrat_20, C_INK);
+    ui_fd_msg = ui_label(ui_fd, "", &lv_font_montserrat_20, C_INK);   // (prose: the smaller face)
     lv_label_set_long_mode(ui_fd_msg, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(ui_fd_msg, lv_pct(100));
-    lv_obj_set_pos(ui_fd_msg, 0, 38);
+    lv_obj_set_pos(ui_fd_msg, 0, 0);
     ui_fd_bar = lv_bar_create(ui_fd);
     lv_bar_set_range(ui_fd_bar, 0, 100);
-    lv_obj_set_size(ui_fd_bar, 366, 12);
-    lv_obj_set_pos(ui_fd_bar, 0, 140);
+    lv_obj_set_size(ui_fd_bar, LW - 50, 14);
+    lv_obj_set_pos(ui_fd_bar, 0, 108);
+    lv_obj_set_style_radius(ui_fd_bar, 0, 0);
+    lv_obj_set_style_radius(ui_fd_bar, 0, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(ui_fd_bar, lv_color_hex(C_DEEP), 0);
     lv_obj_set_style_bg_color(ui_fd_bar, lv_color_hex(C_ACCENT), LV_PART_INDICATOR);
     ui_fd_btn = ui_button(ui_fd, LV_SYMBOL_DOWNLOAD "  Install FreeDOS 1.4", [](lv_event_t*) {
       fd_install_start(false);
       ui_refresh_status();
     }, true);
-    lv_obj_set_size(ui_fd_btn, 366, 56);
-    lv_obj_set_pos(ui_fd_btn, 0, 160);
+    lv_obj_set_size(ui_fd_btn, LW - 50, 48);
+    lv_obj_set_pos(ui_fd_btn, 0, 130);
     ui_fd_iso = ui_button(ui_fd, "", [](lv_event_t*) {
       fd_install_start(true);
       ui_refresh_status();
     }, true);
-    lv_obj_set_size(ui_fd_iso, 216, 56);
-    lv_obj_set_pos(ui_fd_iso, 150, 160);
+    lv_obj_set_size(ui_fd_iso, 266, 48);
+    lv_obj_set_pos(ui_fd_iso, LW - 50 - 266, 130);
     lv_obj_t* iso_l = lv_obj_get_child(ui_fd_iso, 0);   // (one line: a long name ends in "...")
     lv_label_set_long_mode(iso_l, LV_LABEL_LONG_DOT);
-    lv_obj_set_size(iso_l, 192, 26);
+    lv_obj_set_size(iso_l, 242, 26);
     lv_obj_add_flag(ui_fd_iso, LV_OBJ_FLAG_HIDDEN);
+    ui_fd_cap = ui_caption(scr, "FreeDOS", LX, DY, LW);
+    lv_obj_add_flag(ui_fd_cap, LV_OBJ_FLAG_HIDDEN);
   }
 
   lv_obj_t* done = ui_button(scr, "Done", [](lv_event_t*) { panel_close(); }, true);
-  lv_obj_set_pos(done, 32, 626);
-  lv_obj_set_size(done, 410, 62);
-  lv_obj_set_style_text_font(lv_obj_get_child(done, 0), &lv_font_montserrat_28, 0);
+  lv_obj_set_pos(done, LX - 6, DY + 222 + 18);
+  lv_obj_set_size(done, LW + 12, 46);
+  lv_obj_set_style_text_font(lv_obj_get_child(done, 0), &px_font_32, 0);
 
   // networks
-  lv_obj_t* nc = ui_card(scr, 466, 80, 782, 608);
-  lv_obj_t* nt = ui_label(nc, "Wi-Fi networks", &lv_font_montserrat_28, C_INK);
-  lv_obj_set_pos(nt, 0, 4);
-  ui_scan_lbl = ui_label(nc, "", &lv_font_montserrat_20, C_DIM);
-  lv_obj_set_pos(ui_scan_lbl, 0, 46);
+  lv_obj_t* nc = ui_card(scr, RX, TOP, RW, DY + 222 - TOP);
+  ui_scan_lbl = ui_label(nc, "", &px_font_24, C_DIM);
+  lv_obj_set_pos(ui_scan_lbl, 0, 10);
   lv_obj_t* scan = ui_button(nc, LV_SYMBOL_REFRESH "  Scan", [](lv_event_t*) { ui_start_scan(); }, false);
-  lv_obj_set_size(scan, 150, 56);
+  lv_obj_set_size(scan, 150, 48);
   lv_obj_align(scan, LV_ALIGN_TOP_RIGHT, 0, 0);
   ui_list = lv_list_create(nc);
-  lv_obj_set_pos(ui_list, 0, 86);
-  lv_obj_set_size(ui_list, 738, 476);
+  lv_obj_set_pos(ui_list, 0, 64);
+  lv_obj_set_size(ui_list, RW - 50, DY + 222 - TOP - 50 - 64);
   lv_obj_set_style_bg_color(ui_list, lv_color_hex(C_CARD), 0);
   lv_obj_set_style_border_width(ui_list, 0, 0);
+  lv_obj_set_style_radius(ui_list, 0, 0);
   lv_obj_set_style_pad_all(ui_list, 0, 0);
-  lv_obj_set_style_text_font(ui_list, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_font(ui_list, &px_font_24, 0);
+  ui_caption(scr, "Wi-Fi networks", RX, TOP, RW);
 
   ui_build_modal(scr);
 }

@@ -1,78 +1,138 @@
-// The web page (web.h serves it at /): the PC's controls and a file manager with drag and drop. Self-contained.
+// The web page (web.h serves it at /): the PC's controls and a file manager with drag and drop, drawn like a DOS file
+// manager's blue panels. Self-contained but for its pixel font (VT323, from Google Fonts when the browser is online).
 #pragma once
 
 static const char WEB_PAGE[] = R"HTML(<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Tab5 PC</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=VT323&display=swap">
 <style>
-:root{--bg:#11141c;--card:#1a1f2b;--line:#2a3142;--ink:#e8e4da;--dim:#8b93a7;--accent:#5ae2c7;--warn:#f0a868;--bad:#f07878;--hover:#222838}
-@media (prefers-color-scheme:light){:root{--bg:#f3f1ec;--card:#fff;--line:#dedad0;--ink:#1d2230;--dim:#6b7285;--accent:#118f78;--warn:#b86a12;--bad:#c23b3b;--hover:#f0ede6}}
+/* A DOS file manager's blue panels, drawn at today's resolution: double-line frames of two 2 px rules, a cyan menu
+   bar, grey dialog boxes, a function-key bar. One look, light or dark. (VT323 if the browser can fetch it, else the
+   system's monospace face.) */
+:root{--deep:#06104f;--blue:#0c1d9a;--rule:#e9e6d6;--ink:#e9e6d6;--file:#61e2e8;--hi:#2fbcc6;--yellow:#fff35c;
+  --grey:#b9b7ad;--black:#04060e;--bad:#ff7a6e;--pix:"VT323","Lucida Console",Consolas,"DejaVu Sans Mono",monospace;
+  color-scheme:dark}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
-main{max-width:980px;margin:0 auto;padding:20px 16px 60px}
-header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}
-h1{font-size:22px;margin:0;font-weight:650;letter-spacing:.2px}
-.pill{padding:3px 10px;border-radius:999px;font-size:13px;border:1px solid var(--line);color:var(--dim)}
-.pill.run{color:var(--accent);border-color:var(--accent)}.pill.pause{color:var(--warn);border-color:var(--warn)}
+html,body{background:var(--deep)}
+body{margin:0;color:var(--ink);font:22px/1.2 var(--pix);
+  background-image:repeating-linear-gradient(to bottom,transparent 0 3px,rgb(0 0 0/.16) 3px 4px)}
+.menu{background:var(--hi);color:var(--black);padding-block:4px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.menu .in{max-width:1000px;margin:0 auto;display:flex;gap:6px 18px;align-items:center;flex-wrap:wrap}
+h1{font:inherit;font-size:30px;margin:0;letter-spacing:.06em}
+#state{font-size:22px;padding:0 8px;background:var(--black);color:var(--hi);text-transform:uppercase;letter-spacing:.08em}
+#state.run{color:#7dff8a}#state.pause{color:var(--yellow)}
 .grow{flex:1}
-button{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:7px 14px;cursor:pointer}
-button:hover{background:var(--hover)}button.primary{background:var(--accent);color:#0b1712;border-color:var(--accent);font-weight:600}
-button.danger{color:var(--bad)}button:disabled{opacity:.45;cursor:default}
-.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:16px}
-.row{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
-label.slider{display:flex;gap:10px;align-items:center;color:var(--dim);min-width:240px;flex:1}
-input[type=range]{flex:1;accent-color:var(--accent)}
-.banner{border-color:var(--warn);display:none}.banner.show{display:block}
-.banner b{color:var(--warn)}
-.tabs{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
-.tabs button{border-radius:999px}.tabs button.on{border-color:var(--accent);color:var(--accent)}
-.crumbs{display:flex;gap:4px;align-items:center;flex-wrap:wrap;color:var(--dim);margin-bottom:8px}
-.crumbs a{color:var(--ink);cursor:pointer;text-decoration:none;padding:2px 6px;border-radius:6px}.crumbs a:hover{background:var(--hover)}
+main{max-width:1000px;margin:0 auto;padding-block:18px 48px;display:flex;flex-direction:column;gap:22px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+button{font:inherit;color:inherit;background:none;border:0;padding:0 4px;cursor:pointer}
+button:focus-visible{outline:2px solid var(--yellow);outline-offset:2px}
+button:disabled{opacity:.45;cursor:default}
+.menu button{color:var(--black);padding:0 6px}
+.menu button:hover:not(:disabled){background:var(--black);color:var(--hi)}
+.menu button.primary{background:var(--black);color:var(--yellow)}
+.menu button.danger{color:#6a0d06}
+.box{position:relative;background:var(--blue);border:6px double var(--rule);padding:22px 16px 14px;min-width:0}
+.box>.cap{position:absolute;top:-17px;left:50%;transform:translateX(-50%);background:var(--blue);padding:0 10px;
+  white-space:nowrap;color:var(--ink);max-width:calc(100% - 40px);overflow:hidden;text-overflow:ellipsis}
+.dialog{display:none;background:var(--grey);color:var(--black);border:6px double var(--black);outline:2px solid var(--grey);
+  padding:14px 18px;box-shadow:12px 12px 0 rgb(0 0 0/.55)}
+.dialog.show{display:block}
+.dialog b{color:#6a0d06;font-weight:normal;text-transform:uppercase;letter-spacing:.05em}
+.dialog code{font:inherit;background:rgb(0 0 0/.12);padding:0 4px}
+.dialog .row{margin-top:10px}
+.btn{background:var(--black);color:var(--grey);padding:0 8px}
+.btn.primary{color:var(--yellow)}
+.btn:hover{background:#2a2a2a}
+.row{display:flex;gap:10px 22px;align-items:center;flex-wrap:wrap}
+.levels{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr));gap:12px 34px}
+label.slider{display:grid;grid-template-columns:7.5em 1fr 3em;gap:12px;align-items:center;color:var(--ink)}
+label.slider output{color:var(--yellow);text-align:right;font-variant-numeric:tabular-nums}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:20px;margin:0;cursor:pointer;
+  background:repeating-linear-gradient(to right,var(--deep) 0 8px,transparent 8px 10px);border:2px solid var(--rule)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:26px;background:var(--yellow);border:2px solid var(--black)}
+input[type=range]::-moz-range-thumb{width:14px;height:26px;background:var(--yellow);border:2px solid var(--black);border-radius:0}
+input[type=range]:focus-visible{outline:2px solid var(--yellow);outline-offset:3px}
+.drives{display:flex;gap:6px 10px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+.drives::before{content:"Drive";color:var(--yellow);margin-right:4px}
+#tabs{display:contents}
+#tabs button{color:var(--file);padding:0 6px}
+#tabs button.on{background:var(--hi);color:var(--black)}
+#tabs button:hover:not(.on){background:var(--deep)}
+.crumbs{display:flex;gap:0 2px;align-items:center;flex-wrap:wrap;color:var(--ink);margin-bottom:8px;min-width:0}
+.crumbs a{color:var(--ink);cursor:pointer;text-decoration:none;padding:0 3px}
+.crumbs a:hover{background:var(--hi);color:var(--black)}
+.tablewrap{overflow-x:auto;border-top:2px solid var(--rule);border-bottom:2px solid var(--rule)}
 table{width:100%;border-collapse:collapse}
-td{padding:7px 8px;border-top:1px solid var(--line);white-space:nowrap}
+th{color:var(--yellow);font-weight:normal;text-align:left;padding:2px 8px;border-bottom:2px solid var(--rule)}
+th.num{text-align:right}
+td{padding:1px 8px;white-space:nowrap;color:var(--file)}
+td+td,th+th{border-left:2px solid var(--rule)}
 td.name{width:100%;white-space:normal;word-break:break-all}
-td.num{text-align:right;color:var(--dim);font-variant-numeric:tabular-nums}
-tr.dir td.name a{color:var(--accent);font-weight:550}
-td.name a{color:var(--ink);text-decoration:none;cursor:pointer}
-.act button{padding:3px 9px;font-size:13px}
-.empty{color:var(--dim);padding:18px 8px}
-#drop{position:fixed;inset:0;background:color-mix(in srgb,var(--bg) 80%,transparent);border:3px dashed var(--accent);display:none;align-items:center;justify-content:center;font-size:22px;color:var(--accent);z-index:9}
-#drop.show{display:flex}
-#prog{display:none}#prog.show{display:block}
-.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:6px}.bar i{display:block;height:100%;background:var(--accent);width:0}
-.dim{color:var(--dim)}.small{font-size:13px}
-.tools{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto}
-#editor{position:fixed;inset:0;background:color-mix(in srgb,var(--bg) 85%,transparent);display:none;z-index:8;padding:16px}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+tr.dir td{color:var(--ink)}
+tr.dir td.name a{color:var(--ink)}
+td.name a{color:inherit;text-decoration:none;cursor:pointer}
+tbody tr:hover td{background:var(--hi);color:var(--black)}
+tbody tr:hover td a,tbody tr:hover .act button{color:var(--black)}
+.act button{color:var(--file);font-size:20px}
+.act button::before{content:"["}.act button::after{content:"]"}
+.act button:hover{background:var(--black);color:var(--yellow)!important}
+.act button.danger{color:var(--bad)}
+.empty{color:var(--grey);padding:10px 8px}
+#prog{display:none;margin:6px 0}#prog.show{display:block}
+.bar{height:16px;border:2px solid var(--rule);margin-top:4px;background:var(--deep)}
+.bar i{display:block;height:100%;width:0;background:repeating-linear-gradient(to right,var(--yellow) 0 10px,transparent 10px 12px)}
+.dim{color:var(--grey)}.small{font-size:19px}
+#hint{margin:8px 0 0;color:var(--grey);font-size:19px;line-height:1.15}
+.fkeys{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:12px}
+.fkeys button{display:flex;padding:0;background:var(--hi);color:var(--black)}
+.fkeys button kbd{font:inherit;background:var(--black);color:var(--ink);padding:0 5px}
+.fkeys button span{padding:0 8px}
+.fkeys button:hover span{background:var(--yellow)}
+#editor{position:fixed;inset:0;background:rgb(6 16 79/.82);display:none;z-index:8;
+  padding:max(16px,env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) max(16px,env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
 #editor.show{display:flex;align-items:center;justify-content:center}
-#editor .card{width:min(900px,100%);height:min(720px,100%);display:flex;flex-direction:column;gap:10px;margin:0}
-#edtext{flex:1;width:100%;resize:none;font:13px/1.45 ui-monospace,Menlo,Consolas,monospace;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px;tab-size:8}
-</style></head><body><main>
-<header><h1>Tab5 PC</h1><span id="state" class="pill">…</span><span class="grow"></span>
-<button id="pausebtn"></button><button class="danger" id="resetbtn">Reset PC</button></header>
-
-<div class="card banner" id="stopped"><b>The PC is stopped.</b> Its disk images can be deleted or replaced now, and
+#editor .box{width:min(960px,100%);height:min(720px,100%);display:flex;flex-direction:column;gap:10px}
+#edtext{flex:1;width:100%;resize:none;font:21px/1.15 var(--pix);color:var(--file);background:var(--deep);border:2px solid var(--rule);
+  padding:8px 10px;tab-size:8;outline:none}
+#edtext:focus{border-color:var(--yellow)}
+#drop{position:fixed;inset:0;background:rgb(6 16 79/.86);border:10px double var(--yellow);display:none;align-items:center;
+  justify-content:center;text-align:center;font-size:34px;color:var(--yellow);z-index:9;padding:24px}
+#drop.show{display:flex}
+#editor .row button{color:var(--file);font-size:20px}
+#editor .row button:hover{background:var(--black);color:var(--yellow)}
+@media (max-width:520px){body{font-size:20px}label.slider{grid-template-columns:6em 1fr 2.6em}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style></head><body>
+<div class="menu"><div class="in"><h1>TAB5 PC</h1><span id="state">…</span><span class="grow"></span>
+<button id="pausebtn"></button><button class="danger" id="resetbtn">Reset PC</button></div></div>
+<main>
+<div class="dialog" id="stopped"><b>The PC is stopped.</b> Its disk images can be deleted or replaced now, and
 <code>tiny386.ini</code> changed. <b>Start PC</b> restarts the Tab5, which reads <code>tiny386.ini</code> again.</div>
 
-<div class="card banner" id="banner"><b>The PC is paused</b> while its disk <span id="opendisk"></span> is open here.
-<span id="bannermore"></span><div class="row" style="margin-top:10px"><button class="primary" id="donebtn">Done</button>
-<span class="dim small" id="donehint"></span></div></div>
+<div class="dialog" id="banner"><b>The PC is paused</b> while its disk <span id="opendisk"></span> is open here.
+<span id="bannermore"></span><div class="row"><button class="btn primary" id="donebtn">[ Done ]</button>
+<span class="small" id="donehint"></span></div></div>
 
-<div class="card row">
-<label class="slider">Volume <input type="range" id="vol" min="0" max="255"></label>
-<label class="slider">Brightness <input type="range" id="bri" min="8" max="255"></label></div>
+<section class="box"><span class="cap">Sound &amp; screen</span><div class="levels">
+<label class="slider">Volume <input type="range" id="vol" min="0" max="255"><output id="volv"></output></label>
+<label class="slider">Brightness <input type="range" id="bri" min="8" max="255"><output id="briv"></output></label></div></section>
 
-<div class="card">
-<div class="row" style="margin-bottom:10px"><div class="tabs" id="tabs"></div>
-<div class="tools"><button id="mkdirbtn">New folder</button><button id="upfiles">Upload files</button><button id="updir">Upload folder</button></div></div>
+<section class="box" id="files"><span class="cap" id="cap">Files</span>
+<div class="drives"><div id="tabs"></div></div>
 <div class="crumbs" id="crumbs"></div>
-<div id="prog"><span id="progtext" class="small dim"></span><div class="bar"><i id="progbar"></i></div></div>
-<table id="list"></table>
-<p class="dim small" id="hint">Drop files or folders anywhere on this page to copy them here.</p>
-</div>
+<div id="prog"><span id="progtext" class="small"></span><div class="bar"><i id="progbar"></i></div></div>
+<div class="tablewrap"><table id="list"></table></div>
+<p id="hint">Drop files or folders anywhere on this page to copy them here.</p>
+<div class="fkeys"><button id="upfiles"><kbd>F5</kbd><span>Upload files</span></button><button id="updir"><kbd>F6</kbd><span>Upload folder</span></button>
+<button id="mkdirbtn"><kbd>F7</kbd><span>New folder</span></button></div>
+</section>
 <input type="file" id="fileinput" multiple hidden><input type="file" id="dirinput" webkitdirectory hidden>
-</main><div id="editor"><div class="card"><div class="row"><b id="edname"></b><span class="dim small" id="edinfo"></span>
-<span class="grow"></span><button id="edcancel">Cancel</button><button class="primary" id="edsave">Save</button></div>
-<textarea id="edtext" spellcheck="false" autocomplete="off"></textarea></div></div><div id="drop">Drop to copy into <span id="droppath"></span></div>
+</main><div id="editor"><div class="box"><span class="cap" id="edname"></span><div class="row"><span class="small dim" id="edinfo"></span>
+<span class="grow"></span><button class="act" id="edcancel">[Esc Cancel]</button><button class="act" id="edsave">[Ctrl+S Save]</button></div>
+<textarea id="edtext" spellcheck="false" autocomplete="off"></textarea></div></div><div id="drop">Drop to copy into<br><span id="droppath"></span></div>
 <script>
 const $=id=>document.getElementById(id);
 let st={}, vol='', path='/', busy=false, dragging=0, sliding=null, restarting=false;
@@ -87,11 +147,12 @@ const dos83=n=>/^[^ .]{1,8}(\.[^ .]{1,3})?$/.test(n);
 async function status(){
   try{st=await api('GET','/api/status')}catch(e){$('state').textContent=restarting?'restarting…':'offline';return}
   if(restarting&&st.pc!='stopped'){restarting=false;list();return}
-  const s=$('state');s.textContent=restarting?'starting':st.pc;s.className='pill '+(st.pc=='running'?'run':'pause');
+  const s=$('state');s.textContent=restarting?'starting':st.pc;s.className=st.pc=='running'?'run':'pause';
   const stopped=st.pc=='stopped';$('stopped').classList.toggle('show',stopped);
   $('pausebtn').textContent=stopped?'Start PC':st.pc=='paused'?'Resume':'Pause';$('pausebtn').disabled=!!st.open||restarting;
   $('pausebtn').className=stopped?'primary':'';$('resetbtn').style.display=stopped?'none':'';
   if(sliding!='vol')$('vol').value=st.volume;if(sliding!='bri')$('bri').value=st.brightness;
+  $('volv').value=$('vol').value;$('briv').value=$('bri').value;
   const b=$('banner');b.classList.toggle('show',!!st.open);
   if(st.open){$('opendisk').textContent=volName(st.open);
     $('bannermore').textContent=st.changed?'When you are done, it restarts, so DOS reads the disk afresh.':'Nothing has been changed yet: it will simply continue.';
@@ -107,22 +168,23 @@ async function list(){
   $('crumbs').innerHTML='';const parts=path.split('/').filter(x=>x);let acc='';
   const crumb=(txt,p)=>{const a=document.createElement('a');a.textContent=txt;a.onclick=()=>{path=p;list()};$('crumbs').appendChild(a)};
   crumb(volName(vol),'/');parts.forEach(x=>{acc+='/'+x;$('crumbs').append(' / ');crumb(x,acc)});
-  $('droppath').textContent=volName(vol)+path;
+  $('droppath').textContent=volName(vol)+path;$('cap').textContent=volName(vol)+' '+path;
   $('hint').textContent=isHd(vol)?'Drop files or folders anywhere on this page to copy them here. Opening the PC’s disk pauses the PC; DOS sees names longer than 8.3 shortened (LONGNA~1.TXT).':'Drop files or folders anywhere on this page to copy them to the SD card (disk images, CD-ROM .iso files, tiny386.ini).';
   let items;
   try{items=await api('GET','/api/ls?'+q({vol,path}))}catch(e){tb.innerHTML='<tr><td class="empty">'+e.message+'</td></tr>';status();return}
   items.sort((a,b)=>b.d-a.d||a.n.localeCompare(b.n));
-  tb.innerHTML='';
-  if(path!='/'){const tr=tb.insertRow();tr.className='dir';const c=tr.insertCell();c.className='name';c.colSpan=4;
-    const a=document.createElement('a');a.textContent='← ..';a.onclick=()=>{path=path.slice(0,path.lastIndexOf('/'))||'/';list()};c.appendChild(a)}
-  if(!items.length){tb.insertAdjacentHTML('beforeend','<tr><td class="empty" colspan="4">Empty</td></tr>')}
+  tb.innerHTML='';tb.createTHead().innerHTML='<tr><th>Name</th><th class="num">Size</th><th></th></tr>';
+  if(path!='/'){const tr=tb.insertRow();tr.className='dir';const c=tr.insertCell();c.className='name';
+    const a=document.createElement('a');a.textContent='..';a.onclick=()=>{path=path.slice(0,path.lastIndexOf('/'))||'/';list()};c.appendChild(a);
+    tr.insertCell().outerHTML='<td class="num">UP--DIR</td>';tr.insertCell()}
+  if(!items.length){const tr=tb.insertRow();tr.innerHTML='<td class="empty" colspan="3">No files here yet</td>'}
   for(const it of items){
     const p=(path=='/'?'':path)+'/'+it.n, tr=tb.insertRow();tr.className=it.d?'dir':'';
     const c=tr.insertCell();c.className='name';const a=document.createElement('a');
-    a.textContent=(it.d?'📁 ':'')+it.n+(it.busy?'  (in use by the PC)':'');
+    a.textContent=it.n+(it.busy?'  (in use by the PC)':'');
     if(it.d)a.onclick=()=>{path=p;list()};else if(!it.busy){a.href='/api/file?'+q({vol,path:p});a.download=it.n}
     c.appendChild(a);
-    tr.insertCell().outerHTML='<td class="num">'+(it.d?'':fmt(it.s))+'</td>';
+    tr.insertCell().outerHTML='<td class="num">'+(it.d?'SUB-DIR':fmt(it.s))+'</td>';
     const ac=tr.insertCell();ac.className='act';
     if(!it.d&&!it.busy&&isText(it.n)&&it.s<=EDIT_MAX){const ed=document.createElement('button');ed.textContent='Edit';
       ed.onclick=()=>edit(p,it.n);ac.append(ed,' ')}
@@ -189,7 +251,10 @@ async function edit(p,name){
   $('edtext').value=text.replace(/\r\n/g,'\n');$('editor').classList.add('show');$('edtext').focus()}
 const edClose=()=>{$('editor').classList.remove('show');edPath=''};
 $('edcancel').onclick=edClose;
-addEventListener('keydown',e=>{if(e.key=='Escape'&&edPath)edClose()});
+addEventListener('keydown',e=>{
+  if(edPath){if(e.key=='Escape')edClose();else if(e.key=='s'&&(e.ctrlKey||e.metaKey)){e.preventDefault();$('edsave').click()}return}
+  const k={F5:'upfiles',F6:'updir',F7:'mkdirbtn'}[e.key];   // (the function-key bar's keys)
+  if(k&&!e.ctrlKey&&!e.altKey&&!e.metaKey){e.preventDefault();$(k).click()}});
 $('edsave').onclick=async()=>{
   let text=$('edtext').value;if(edCrlf)text=text.replace(/\n/g,'\r\n');
   const bytes=edUtf8?new TextEncoder().encode(text):Uint8Array.from(text,c=>c.charCodeAt(0)&255);
@@ -200,7 +265,7 @@ $('edsave').onclick=async()=>{
 $('resetbtn').onclick=async()=>{if(!confirm('Reset the PC? Anything unsaved in DOS is lost.'))return;await api('POST','/api/pc?do=reset').catch(e=>alert(e.message));status()};
 $('donebtn').onclick=async()=>{await api('POST','/api/pc?do=done').catch(e=>alert(e.message));status()};
 for(const [id,key] of [['vol','volume'],['bri','brightness']]){const el=$(id);
-  el.oninput=()=>{sliding=id;clearTimeout(el.t);el.t=setTimeout(()=>api('POST','/api/set?'+key+'='+el.value),120)};
+  el.oninput=()=>{sliding=id;$(id+'v').value=el.value;clearTimeout(el.t);el.t=setTimeout(()=>api('POST','/api/set?'+key+'='+el.value),120)};
   el.onchange=()=>{sliding=null;api('POST','/api/set?'+key+'='+el.value)}}
 status().then(list);setInterval(()=>{if(!busy)status()},2000);
 </script></body></html>)HTML";
