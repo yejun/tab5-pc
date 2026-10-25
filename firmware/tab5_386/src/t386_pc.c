@@ -50,9 +50,10 @@ static inline uint8_t t386_vga_mem_read(VGAState* s, uint32_t off) {
     uint32_t v;
     return t386_vga_read_fast(off, 1, &v) ? v : vga_mem_read(s, off);
 }
+void t386_vga_written(uint32_t off, int size);   // (t386_vga_ext.h: VBE banks)
 #define T386_VGA_WRITE(f, size) \
     static inline void t386_##f(VGAState* s, uint32_t off, uint32_t v) { \
-        if (!t386_vga_write_fast(off, size, v)) f(s, off, v); \
+        if (!t386_vga_write_fast(off, size, v)) { f(s, off, v); t386_vga_written(off, size); } \
     }
 T386_VGA_WRITE(vga_mem_write, 1)
 T386_VGA_WRITE(vga_mem_write16, 2)
@@ -66,6 +67,7 @@ static inline void t386_vga_ioport_write(VGAState* s, uint32_t addr, uint32_t va
 static inline void t386_vbe_write(VGAState* s, uint32_t offset, uint32_t val) {
     vbe_write(s, offset, val);
     t386_vga_fw_update();
+    t386_vram_mark(0, 1u << 31);   // (a mode set clears video memory)
 }
 // The vertical retrace (status register 3DA/3BA) as of the moment it is read: vga_step moves it on by the time. (Core 0
 // did it every millisecond, but not while it draws the screen, 30-80 ms: a program could wait for it that long.)
@@ -77,11 +79,47 @@ static inline uint32_t t386_vga_ioport_read(VGAState* s, uint32_t addr) {
 #define vga_ioport_write t386_vga_ioport_write
 #define vga_ioport_read t386_vga_ioport_read
 #define vbe_write t386_vbe_write
+uint32_t t386_vbe_read(VGAState* s, uint32_t offset);   // (t386_vga_ext.h: the largest VBE mode)
+#define vbe_read t386_vbe_read
 #define vga_mem_read t386_vga_mem_read
 #define vga_mem_write t386_vga_mem_write
 #define vga_mem_write16 t386_vga_mem_write16
 #define vga_mem_write32 t386_vga_mem_write32
 
+// pc_new's CPU callbacks, kept as cpui386_new hands them out, for t386_lfb_hooks
+#include "i386.h"
+static CPU_CB* t386_cb;
+static CPUI386* t386_cpui386_new(int gen, char* phys_mem, long phys_mem_size, CPU_CB** cb) {
+    CPUI386* cpu = cpui386_new(gen, phys_mem, phys_mem_size, cb);
+    t386_cb = *cb;
+    return cpu;
+}
+#define cpui386_new t386_cpui386_new
+
 #define fprintf t386_fprintf
 #pragma GCC optimize("O3")
 #include "pc.c"
+
+// The linear frame buffer's writes mark what they change (t386_vga_fw.h, t386_vram_mark): pc.c's iomem callbacks,
+// wrapped by t386_lfb_hooks() after pc_new
+#define T386_LFB_WRITE(f, T, size) \
+    static void t386_##f(void* iomem, uword addr, T val) { \
+        PC* pc = iomem; \
+        if (addr >= pc->pci_vga_ram_addr) t386_vram_mark(addr - pc->pci_vga_ram_addr, size); \
+        f(iomem, addr, val); \
+    }
+T386_LFB_WRITE(iomem_write8, u8, 1)
+T386_LFB_WRITE(iomem_write16, u16, 2)
+T386_LFB_WRITE(iomem_write32, u32, 4)
+static bool t386_iomem_write_string(void* iomem, uword addr, uint8_t* buf, int len) {
+    PC* pc = iomem;
+    if (addr >= pc->pci_vga_ram_addr && len > 0) t386_vram_mark(addr - pc->pci_vga_ram_addr, len);
+    else if (addr - 0xa0000 < 0x10000) t386_vga_written(addr - 0xa0000, len);   // (the window: VBE banks)
+    return iomem_write_string(iomem, addr, buf, len);
+}
+void t386_lfb_hooks(void) {
+    t386_cb->iomem_write8 = t386_iomem_write8;
+    t386_cb->iomem_write16 = t386_iomem_write16;
+    t386_cb->iomem_write32 = t386_iomem_write32;
+    t386_cb->iomem_write_string = t386_iomem_write_string;
+}

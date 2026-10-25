@@ -4,6 +4,17 @@
 #pragma once
 #include <stdint.h>
 
+// Which pieces of video memory (1 << t386_vram_shift bytes each, at most 1024 pieces) were written since the native
+// renderer last looked: for VBE modes, so it reads only the lines in those (t386_vga_ext.h). Marked by the linear frame
+// buffer's writes (t386_pc.c: pc.c's iomem callbacks, which the fast path, translated code and tiny386's own
+// interpreter all end in) and the 64 KB window's (t386_vga_write_fast, and vga.c's when it doesn't take them).
+extern uint8_t t386_vram_dirty[1024];
+extern int t386_vram_shift;
+static inline void t386_vram_mark(uint32_t off, uint32_t n) {
+    const uint32_t last = (off + n - 1) >> t386_vram_shift;
+    for (uint32_t i = off >> t386_vram_shift; i <= last && i < 1024; i++) t386_vram_dirty[i] = 1;
+}
+
 enum {
     T386_FW_NONE,     // the usual way (t386_jit_wr1/2/4)
     T386_FW_PLANAR,   // planar (EGA modes, mode X), write mode 0 as a plain store: a byte to the planes in wm

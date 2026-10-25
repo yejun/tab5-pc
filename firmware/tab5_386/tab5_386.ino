@@ -54,10 +54,11 @@ void t386_port_report(char* buf, int len);
 void t386_irq_report(char* buf, int len);
 extern int t386_step_max;
 uint32_t t386_vga_frame_hash(VGAState* s);
-void t386_vga_snapshot(VGAState* s, uint8_t* shadow);
+void t386_vga_snapshot(VGAState* s, uint8_t* shadow, size_t shadow_size);
 uint32_t t386_mix(uint32_t h, const void* p, size_t n);
 extern VGAState* t386_vga;   // the fast video memory paths (src/t386_vga_ext.h)
 void t386_vga_fw_update(void);
+void t386_lfb_hooks(void);
 }
 
 static constexpr const char* FIRMWARE_VERSION = "1.0.0";
@@ -71,6 +72,7 @@ static int64_t g_frame_us = 33333;                 // screen refresh: ~30 fps (s
 static PC* g_pc = nullptr;
 static uint16_t* g_emu_fb = nullptr;
 static uint8_t* g_vga_shadow = nullptr;            // a copy of the video memory, which each refresh reads
+static size_t g_vga_shadow_size = 0;               // (its first 256 KB: the VGA's; VBE modes are drawn natively)
 static uint16_t* g_panel_fb = nullptr;
 static ppa_client_handle_t g_ppa = nullptr;
 static int g_rot = 1;                              // 1 = landscape, 3 = upside down (docked in the keyboard)
@@ -314,9 +316,12 @@ static void redraw(void*, int, int, int, int) {
 // across and per scan line down (as tiny386's 720 x 480 picture would be): mode 13h and 0Dh by 3 (960 x 600), 12h by
 // 1.5 (960 x 720). The sound crackled while the PPA wrote the whole picture every frame (~1.2 MB, 28 times a second),
 // and again with runs of lines of any size and place; in groups making 24 panel lines it is clean.
-static constexpr int NATIVE_W = 720, NATIVE_H = 480;
+// VBE modes (8 to 32 bits a pixel) too, up to 1024 x 768 when there is the memory for that buffer (else 720 x 480),
+// the BIOS offering no larger (t386_vbe_max_w): scaled down to fit when larger than the PC's part of the panel.
+static constexpr int NATIVE_W = 720, NATIVE_H = 480, NATIVE_VBE_W = 1024, NATIVE_VBE_H = 768;
 static uint16_t* g_native_fb;
-static uint8_t g_native_dirty[NATIVE_H];
+static int g_native_w = NATIVE_W, g_native_h = NATIVE_H;   // its size
+static uint8_t g_native_dirty[NATIVE_VBE_H];
 static T386Native g_native = {};   // what is on the panel (w 0: tiny386's whole picture is)
 static bool g_native_on = true;    // serial native 0|1: tiny386's renderer for every mode instead
 
@@ -325,9 +330,11 @@ static void show_native(const T386Native& n) {
   const int64_t t0 = esp_timer_get_time();
   float sx = 1.5f * n.dx, sy = 1.5f * n.ly;
   if (g_aspect43) sx = q16((float)ASPECT_W / n.w), sy = q16((float)OUT_H / n.h);
+  const float fit = fminf((float)OUT_W / (n.w * sx), (float)OUT_H / (n.h * sy));   // (VBE: 1024 x 768 at 1.5)
+  if (fit < 1) sx = q16(sx * fit), sy = q16(sy * fit);
   const int sw = (int)(n.w * sx), sh = (int)(n.h * sy);
   const int ox = OUT_X + (OUT_W - sw) / 2 & ~7, oy = (OUT_H - sh) / 2 & ~7;   // landscape
-  if (n.w != g_native.w || n.h != g_native.h || n.dx != g_native.dx || n.ly != g_native.ly) {
+  if (n.w != g_native.w || n.h != g_native.h || n.dx != g_native.dx || n.ly != g_native.ly || n.bpp != g_native.bpp) {
     // another shape: black around it (landscape column x is panel row x, or 1279 - x upside down; the picture's
     // lines are panel columns oy .. oy + sh, or 719 - their mirror)
     const int c0 = g_rot == 1 ? FB_W - (oy + sh) : oy, c1 = c0 + sh;
@@ -342,7 +349,10 @@ static void show_native(const T386Native& n) {
       }
     }
     t386_msync(g_panel_fb + (size_t)FB_W * OUT_X, (size_t)FB_W * OUT_W * 2, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
-    Serial.printf("screen: %d x %d pixels, %d x %d dots each, at %d,%d\n", n.w, n.h, n.dx, n.ly, ox, oy);
+    if (n.bpp)
+      Serial.printf("screen: VBE %d x %d, %d bits a pixel, at %d,%d, %.4g x %.4g\n", n.w, n.h, n.bpp, ox, oy, sx, sy);
+    else
+      Serial.printf("screen: %d x %d pixels, %d x %d dots each, at %d,%d\n", n.w, n.h, n.dx, n.ly, ox, oy);
   }
   g_native = n;
   t386_msync(g_native_fb, (size_t)n.w * n.h * 2, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
@@ -748,11 +758,12 @@ static void display_task(void*) {
       JitHold whole;   // (the whole refresh, its PSRAM writes too)
 #endif
       T386Native n;
-      if (g_native_on && g_native_fb && t386_vga_render_native(g_pc->vga, g_native_fb, g_native_dirty, NATIVE_W, NATIVE_H,
-                                                g_native.w == 0, &n)) {
-        // (the renderer fingerprints the lines itself: no whole-frame fingerprint first)
+      if (g_native_on && g_native_fb &&
+          t386_vga_render_native(g_pc->vga, g_native_fb, g_native_dirty, g_native_w, g_native_h, g_native.w == 0, &n)) {
+        // (the renderer fingerprints the lines itself: no whole-frame fingerprint first; its time counts as the
+        // check's, and the conversion of the lines that changed with it)
         const int64_t t1 = esp_timer_get_time();
-        g_stats.refresh_us += t1 - now;
+        g_stats.hash_us += t1 - now;
         if (n.changed) {
           show_native(n);
           g_stats.refresh_us += esp_timer_get_time() - t1;
@@ -770,7 +781,7 @@ static void display_task(void*) {
             g_native.w = 0;
             g_bands_valid = false;
           }
-          t386_vga_snapshot(g_pc->vga, g_vga_shadow);
+          t386_vga_snapshot(g_pc->vga, g_vga_shadow, g_vga_shadow_size);
           vga_refresh(g_pc->vga, redraw, nullptr, g_pc->full_update != 0);
           if (g_pc->full_update == 2) g_pc->full_update = 0;
           g_stats.refresh_us += esp_timer_get_time() - t1;
@@ -888,11 +899,22 @@ void setup() {
   fb_sync();
   g_input = xQueueCreate(64, sizeof(InputEvent));
   g_pc = pc_new(redraw, nullptr, (u8*)g_emu_fb, &g_conf);
+  t386_lfb_hooks();
   guest_net_mac();
   t386_vga = g_pc->vga;
   t386_vga_fw_update();
-  g_vga_shadow = (uint8_t*)heap_caps_malloc(g_conf.vga_mem_size, MALLOC_CAP_SPIRAM);
-  g_native_fb = (uint16_t*)heap_caps_aligned_calloc(128, 1, NATIVE_W * NATIVE_H * 2, MALLOC_CAP_SPIRAM);
+  g_vga_shadow_size = min<size_t>(g_conf.vga_mem_size, 0x40000);
+  g_vga_shadow = (uint8_t*)heap_caps_malloc(g_vga_shadow_size, MALLOC_CAP_SPIRAM);
+  // the VBE modes' buffer, leaving 1.5 MB for what comes after (disks, sound, network, the web page)
+  if (heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) >= NATIVE_VBE_W * NATIVE_VBE_H * 2 + (3 << 19))
+    g_native_fb = (uint16_t*)heap_caps_aligned_calloc(128, 1, NATIVE_VBE_W * NATIVE_VBE_H * 2, MALLOC_CAP_SPIRAM);
+  if (g_native_fb) {
+    g_native_w = t386_vbe_max_w = NATIVE_VBE_W;
+    g_native_h = t386_vbe_max_h = NATIVE_VBE_H;
+  } else {
+    g_native_fb = (uint16_t*)heap_caps_aligned_calloc(128, 1, NATIVE_W * NATIVE_H * 2, MALLOC_CAP_SPIRAM);
+  }
+  Serial.printf("VBE modes up to %d x %d\n", g_native_w, g_native_h);
   if (!g_vga_shadow) Serial.println("no memory for the video memory copy: the screen may tear");
   disk_raw_setup(g_conf);
   load_bios_and_reset(g_pc);

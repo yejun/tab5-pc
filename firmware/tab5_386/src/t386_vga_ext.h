@@ -59,8 +59,10 @@ uint32_t t386_vga_frame_hash(VGAState* s) {
 // Copy the video memory the next vga_refresh will read into `shadow` (as large as the video memory) and point the
 // refresh at it. A refresh takes up to ~80 ms on core 0, while the program goes on running on core 1: a game that
 // flips pages would already be clearing and redrawing the page being converted (black patches, from the top left).
-// The copy takes a moment. NULL: refresh from the video memory itself again.
-void t386_vga_snapshot(VGAState* s, uint8_t* shadow) {
+// The copy takes a moment. NULL: refresh from the video memory itself again. shadow_size: the copy's size, at least
+// 256 KB; a VBE picture that lies beyond it is refreshed from the video memory itself (the native renderer draws
+// most VBE modes: these are the ones with 4 bits a pixel, or all with serial "native 0").
+void t386_vga_snapshot(VGAState* s, uint8_t* shadow, size_t shadow_size) {
     if (shadow) {
         size_t start = 0, len = s->vga_ram_size < 0x40000 ? s->vga_ram_size : 0x40000;   // planes, text, fonts
         if (vbe_enabled(s)) {
@@ -69,18 +71,21 @@ void t386_vga_snapshot(VGAState* s, uint8_t* shadow) {
             if (start > (size_t)s->vga_ram_size) start = 0;
             if (start + len > (size_t)s->vga_ram_size) len = s->vga_ram_size - start;
         }
-        memcpy(shadow + start, s->vga_ram + start, len);
+        if (start + len > shadow_size) shadow = NULL;
+        else memcpy(shadow + start, s->vga_ram + start, len);
     }
     s->vga_ram_view = shadow;
 }
 
-// The VGA's graphics modes with 16 colours (EGA 0Dh, 0Eh, 10h, VGA 12h, planar) and 256 (13h, Mode X; not VBE),
-// drawn at their own resolution (320 x 200 ... 720 x 480 pixels) as RGB565 into dst, for the PPA to scale onto the
-// panel. tiny386's vga_refresh draws them dot by dot into 720 x 480 (~35-65 ms a frame); here each line's video
-// memory is fingerprinted and only the lines that changed are converted (8 planar pixels at a time through tables),
-// and dirty[y] says which. Also what tiny386 leaves out: the pixel panning (smooth sideways scrolling) and
-// the line compare (split screen), and the 256 KB wrap of the video memory. False for other modes (text, CGA, VBE).
-#define NAT_MAX_H 480
+// The VGA's graphics modes with 16 colours (EGA 0Dh, 0Eh, 10h, VGA 12h, planar) and 256 (13h, Mode X), and the VBE
+// modes with 8 bits a pixel or more, drawn at their own resolution (320 x 200 ... 720 x 480 pixels, VBE up to
+// max_w x max_h) as RGB565 into dst, for the PPA to scale onto the panel. tiny386's vga_refresh draws them dot by dot
+// into 720 x 480 (~35-65 ms a frame), VBE modes larger than that cut off; here each line's video memory is
+// fingerprinted and only the lines that changed are converted (8 planar pixels at a time through tables), and
+// dirty[y] says which. Also what tiny386 leaves out: the pixel panning (smooth sideways scrolling) and the line
+// compare (split screen), and the 256 KB wrap of the video memory. False for other modes (text, CGA, VBE with 4 bits
+// a pixel).
+#define NAT_MAX_H 768
 static uint32_t nat_row_hash[NAT_MAX_H];
 static uint32_t nat_params;
 static uint32_t nat_expand[256];   // bit 7 - i of the byte -> bit 0 of nibble i (pixel i)
@@ -108,9 +113,122 @@ bool t386_vga_picture(VGAState* s, int* w, int* h) {
     return *w > 0 && *h > 0;
 }
 
+// The largest VBE mode the BIOS offers: tiny386 answers the Bochs interface's question (GETCAPS) with its frame
+// buffer's size, 720 x 480; t386_vbe_max_w x _h instead, when set (before the BIOS starts: it asks once), as large as
+// the buffer the firmware gives t386_vga_render_native. vbe_read in pc.c (t386_pc.c).
+int t386_vbe_max_w, t386_vbe_max_h;
+uint32_t t386_vbe_read(VGAState* s, uint32_t offset) {
+    if (offset && t386_vbe_max_w && (s->vbe_regs[VBE_DISPI_INDEX_ENABLE] & VBE_DISPI_GETCAPS)) {
+        if (s->vbe_index == VBE_DISPI_INDEX_XRES) return t386_vbe_max_w;
+        if (s->vbe_index == VBE_DISPI_INDEX_YRES) return t386_vbe_max_h;
+    }
+    return vbe_read(s, offset);
+}
+
+uint8_t t386_vram_dirty[1024];
+int t386_vram_shift = 11;
+static uint8_t nat_vram_seen[1024];   // t386_vram_dirty as the renderer took it (and cleared it)
+
+// t386_mix for a VBE mode's line (up to 4 KB, n a multiple of 4, at a multiple of 4): four words at a time, in
+// four lanes whose multiplies don't wait for each other
+static uint32_t nat_mix_line(const uint8_t* p, uint32_t n) {
+    const uint32_t* w = (const uint32_t*)p;
+    const uint32_t nw = n / 4, k = 0x9E3779B1u;
+    uint32_t a = 0x811C9DC5u, b = 0x01000193u, c = 0x85EBCA6Bu, d = 0xC2B2AE35u, i = 0;
+    for (; i + 4 <= nw; i += 4) {
+        a = (a ^ w[i]) * k;
+        b = (b ^ w[i + 1]) * k;
+        c = (c ^ w[i + 2]) * k;
+        d = (d ^ w[i + 3]) * k;
+        a ^= a >> 15;
+        b ^= b >> 15;
+        c ^= c >> 15;
+        d ^= d >> 15;
+    }
+    for (; i < nw; i++) a = (a ^ w[i]) * k, a ^= a >> 15;
+    const uint32_t lanes[3] = { b, c, d };
+    return t386_mix(a, lanes, sizeof(lanes));
+}
+
+// A VBE mode (8, 15, 16, 24 or 32 bits a pixel) as t386_vga_render_native draws the VGA's: a line of it from the
+// palette, or its RGB, as vga_graphic_refresh's 16-bit conversions do
+static bool nat_vbe(VGAState* s, uint16_t* dst, uint8_t* dirty, int max_w, int max_h, bool force, T386Native* out) {
+    const int bpp = s->vbe_regs[VBE_DISPI_INDEX_BPP];
+    const int w = s->vbe_regs[VBE_DISPI_INDEX_XRES], h = s->vbe_regs[VBE_DISPI_INDEX_YRES];
+    if (bpp < 8 || w <= 0 || h <= 0 || w > max_w || h > max_h || h > NAT_MAX_H || (w & 7)) return false;
+    uint32_t pal[256];
+    uint32_t params = 0x811C9DC5u;
+    if (bpp == 8) {
+        update_palette256(s, pal);
+        params = t386_mix(params, pal, sizeof(pal));
+    }
+    const uint32_t geo[6] = { (uint32_t)w, (uint32_t)h, (uint32_t)bpp, s->vbe_start_addr, s->vbe_line_offset,
+                              0x10000 };   // (not a VGA mode's)
+    params = t386_mix(params, geo, sizeof(geo));
+    // the pieces of video memory written since the last time, taken and cleared (a write meanwhile marks its piece
+    // again: drawn the next time too); the lines in none of them are as they were
+    uint32_t* dirty32 = (uint32_t*)t386_vram_dirty;
+    uint32_t* seen32 = (uint32_t*)nat_vram_seen;
+    for (int i = 0; i < 1024 / 4; i++)
+        seen32[i] = dirty32[i] ? __atomic_exchange_n(&dirty32[i], 0, __ATOMIC_ACQ_REL) : 0;
+    const bool all = force || params != nat_params;
+    if (all) {
+        for (int y = 0; y < h; y++) nat_row_hash[y] = ~0u;
+        nat_params = params;
+    }
+    // (lines start at a multiple of 4: the start address counts in 4 bytes, and a line is 8 pixels' multiple long)
+    const uint32_t line_bytes = (uint32_t)w * ((bpp + 7) / 8), line_offset = s->vbe_line_offset;
+    uint32_t addr = 4 * s->vbe_start_addr;
+    int changed = 0;
+    for (int y = 0; y < h; y++, addr += line_offset) {
+        dirty[y] = 0;
+        if (!all) {
+            const uint32_t last = (addr + line_bytes - 1) >> t386_vram_shift;
+            bool written = false;
+            for (uint32_t i = addr >> t386_vram_shift; i <= last && i < 1024; i++) written |= nat_vram_seen[i];
+            if (!written) continue;
+        }
+        const bool in = addr < (uint32_t)s->vga_ram_size && line_bytes <= (uint32_t)s->vga_ram_size - addr;
+        const uint8_t* src = s->vga_ram + addr;
+        const uint32_t hash = in ? nat_mix_line(src, line_bytes) : 0;   // (0: outside, black)
+        dirty[y] = hash != nat_row_hash[y];
+        if (!dirty[y]) continue;
+        nat_row_hash[y] = hash;
+        ++changed;
+        uint16_t* d = dst + y * w;
+        uint32_t* d32 = (uint32_t*)d;
+        const uint32_t* s32 = (const uint32_t*)src;
+        if (!in) {
+            memset(d, 0, w * 2);
+        } else if (bpp == 8) {
+            for (int x = 0; x < w / 2; x++) d32[x] = pal[src[2 * x]] | (pal[src[2 * x + 1]] << 16);
+        } else if (bpp == 15) {   // xRRRRRGGGGGBBBBB: green's low bit 0
+            for (int x = 0; x < w / 2; x++) d32[x] = ((s32[x] << 1) & 0xffc0ffc0u) | (s32[x] & 0x001f001fu);
+        } else if (bpp == 16) {
+            memcpy(d, src, w * 2);
+        } else if (bpp == 24) {   // B, G, R
+            for (int x = 0; x < w; x++, src += 3) d[x] = (src[0] >> 3) | ((src[1] >> 2) << 5) | ((src[2] >> 3) << 11);
+        } else {   // 32: B, G, R, unused
+            for (int x = 0; x < w; x++) {
+                const uint32_t v = s32[x];
+                d[x] = ((v >> 8) & 0xf800) | ((v >> 5) & 0x07e0) | ((v >> 3) & 0x001f);
+            }
+        }
+    }
+    out->w = w;
+    out->h = h;
+    out->dx = out->ly = 1;
+    out->changed = changed;
+    out->pan = 0;
+    out->split_y = -1;
+    out->bpp = bpp;
+    return true;
+}
+
 bool t386_vga_render_native(VGAState* s, uint16_t* dst, uint8_t* dirty, int max_w, int max_h, bool force,
                             T386Native* out) {
-    if (!(s->gr[0x06] & 1) || vbe_enabled(s) || s->vga_ram_size < 0x40000) return false;   // text, VBE
+    if (vbe_enabled(s) && s->gr[0x06] & 1) return nat_vbe(s, dst, dirty, max_w, max_h, force, out);
+    if (!(s->gr[0x06] & 1) || vbe_enabled(s) || s->vga_ram_size < 0x40000) return false;   // text
     const int shift_control = (s->gr[0x05] >> 5) & 3;
     if (shift_control == 1) return false;                      // CGA 4 colours
     if ((s->cr[0x17] & 3) != 3) return false;                  // CGA / Hercules line interleaving
@@ -196,6 +314,7 @@ bool t386_vga_render_native(VGAState* s, uint16_t* dst, uint8_t* dirty, int max_
     out->changed = changed;
     out->pan = pan_all;
     out->split_y = split_y;
+    out->bpp = 0;
     return true;
 }
 
@@ -248,6 +367,11 @@ void t386_vga_fw_update(void) {
             f.m16 = mask16;
         }
         if (!(s->msr & MSR_RAM_ENABLE)) f.kind = T386_FW_NONE;   // (writes go nowhere: vga.c)
+        if (vbe_enabled(s)) f.kind = T386_FW_NONE;   // (t386_vga_write_fast marks what VBE modes' writes change)
+    }
+    if (s) {   // pieces of video memory: at most 1024 (2 KB each for 2 MB)
+        t386_vram_shift = 11;
+        while (((uint32_t)s->vga_ram_size >> t386_vram_shift) > 1024) ++t386_vram_shift;
     }
     t386_vga_fw = f;
 }
@@ -288,6 +412,7 @@ int t386_vga_write_fast(uint32_t off, int size, uint32_t v) {
         if (off + size > (uint32_t)s->vga_ram_size) return 0;
         for (int i = 0; i < size; i++, v >>= 8)
             if (pm & (1 << ((off + i) & 3))) s->vga_ram[off + i] = v;
+        t386_vram_mark(off, size);   // (VBE modes through the window)
         return 1;
     }
     if (mode & 0x10 || (off + size) * 4 > (uint32_t)s->vga_ram_size) return 0;   // odd/even (text)
@@ -307,6 +432,12 @@ int t386_vga_write_fast(uint32_t off, int size, uint32_t v) {
     for (int i = 0; i < size; i++, v >>= 8)   // (16-colour graphics drivers: set/reset, write modes 2 and 3, the bit mask)
         p[i] = (p[i] & ~wm) | (vga_latched_write(s, mode & 3, v & 0xff) & wm);
     return 1;
+}
+
+// A write to the window that vga.c's vga_mem_write did (t386_pc.c): marked, in a VBE mode
+void t386_vga_written(uint32_t off, int size) {
+    VGAState* s = t386_vga;
+    if (s && vbe_enabled(s)) t386_vram_mark(off + s->bank_offset, size);
 }
 
 int t386_vga_read_fast(uint32_t off, int size, uint32_t* out) {

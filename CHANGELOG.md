@@ -30,6 +30,14 @@
   (colour compare) by the fast path. Twenty fills of the 640 x 480 x 16 screen with set/reset or write modes 2 and 3
   take about 6-7 BIOS ticks instead of 16-17. Writes go nowhere while the misc output register's RAM enable bit is
   clear, as in vga.c.
+- VBE modes up to 1024 x 768 (were 720 x 480): 800 x 600 and 1024 x 768 with 256 colours, 32K and 64K, 800 x 600
+  with 16M too (2 MB of video memory), drawn at their own size and scaled onto the panel by the PPA (1024 x 768 at
+  960 x 720). tiny386's renderer cut off what lay beyond 720 x 480. The 1024 x 768 buffer (1.5 MB) is taken when
+  there is the memory, else VBE modes stay at 720 x 480.
+- What VBE modes' writes change (through the linear frame buffer or the 64 KB window) is marked in 2 KB pieces, and
+  only those lines are read again: checking a still 1024 x 768 x 16 picture for changes takes 0.1 ms a frame instead
+  of 15 ms.
+- The copy of video memory each tiny386 refresh reads is 256 KB, not all of it: 1.3 MB more memory free.
 
 ## 1.0.0 (2026-10-22)
 
