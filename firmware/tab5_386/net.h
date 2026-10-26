@@ -64,7 +64,7 @@ static void wifi_enable(bool on) {
       WiFi.setAutoReconnect(true);
       pc_hold(false);
       g_wifi_ready = true;
-      guest_net_start();
+      guest_net_start();   // (done at the start; again only if that failed)
     } else {
       esp_wifi_start();
     }

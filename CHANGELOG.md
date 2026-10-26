@@ -57,6 +57,11 @@
   when tiny386 empties its TLB in place (INVLPG).
 - tiny386 at upstream 003c266 (was 1a8f1e0): FXCH without losing precision, VGA line compare and pel panning,
   linuxstart's `vga=` option; patches 0002, 0013 and 0015 rebased (0015 now only the 80-bit moves).
+- The PC's network is there from the start, Wi-Fi on or off (it started with Wi-Fi): with Wi-Fi off the PC still gets
+  its address by DHCP, instead of its DHCP client waiting for a server that wasn't there (some systems stopped at a
+  message about it). The DNS server handed out is now the Tab5 itself, relaying to the Wi-Fi network's DNS server of
+  the moment, so names resolve on a lease taken before Wi-Fi was on or before it joined another network; with Wi-Fi
+  off, lookups fail at once. Network setup failures leave the card unconnected instead of half set up.
 - Serial `ptap x y` (a tap on the settings panel) and `mev dx dy buttons` (a PS/2 mouse event), for testing.
 
 ## 1.0.0 (2026-10-22)

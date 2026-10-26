@@ -929,6 +929,7 @@ void setup() {
   g_pc = pc_new(redraw, nullptr, (u8*)g_emu_fb, &g_conf);
   t386_lfb_hooks();
   guest_net_mac();
+  guest_net_start();   // (the PC's network, Wi-Fi on or off)
   t386_vga = g_pc->vga;
   t386_vga_fw_update();
   g_vga_shadow_size = min<size_t>(g_conf.vga_mem_size, 0x40000);

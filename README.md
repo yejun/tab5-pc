@@ -136,12 +136,13 @@ Switch Wi-Fi off again when you are done. It is off after every restart, except 
 
 ### The PC's network
 
-While Wi-Fi is on, the PC's network card (NE2000, port 300h, IRQ 9) is connected to a small network inside the Tab5
-(192.168.77.0/24; the Tab5 at .1 hands out addresses by DHCP), routed to your Wi-Fi network with address
-translation, as a home router does. The PC reaches your network and the internet; from your network, ports 2222,
-2323 and 8080 of the Tab5 lead to the PC's 22, 23 and 80 (an SSH, Telnet or web server running in it). DOS needs a
-packet driver for the NE2000 and a TCP/IP program; serial `net` shows the card's state. The same warning applies:
-anything the PC serves on those ports is open to your network.
+The PC's network card (NE2000, port 300h, IRQ 9) is connected to a small network inside the Tab5 (192.168.77.0/24; the
+Tab5 at .1 hands out addresses by DHCP and answers DNS queries by passing them on to your Wi-Fi network's DNS server).
+While Wi-Fi is on, it is routed to your Wi-Fi network with address translation, as a home router does; with Wi-Fi off,
+the PC still gets its address, and its lookups fail at once. The PC reaches your network and the internet; from your
+network, ports 2222, 2323 and 8080 of the Tab5 lead to the PC's 22, 23 and 80 (an SSH, Telnet or web server running in
+it). DOS needs a packet driver for the NE2000 and a TCP/IP program; serial `net` shows the card's state. The same
+warning applies: anything the PC serves on those ports is open to your network.
 
 For example with FreeDOS's NE2000 packet driver (Crynwr's `NE2000.COM`) and [mTCP](https://www.brutman.com/mTCP/)
 (DHCP, ping, FTP, Telnet, HTTP client and server, IRC, time), both free software, in `C:\NET` with an `MTCP.CFG`
