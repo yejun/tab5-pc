@@ -46,7 +46,8 @@
 - The settings panel and the web page in a DOS-era look: the panel like a BIOS setup screen in a pixel font drawn
   at 2x3 and 3x4 (UNSCII), the web page like a DOS file manager.
 - The settings panel's Wi-Fi switch moves as soon as it is tapped (it waited for Wi-Fi to start, a few seconds),
-  with "Switching Wi-Fi on ..." meanwhile; its label toggles it too, and the switches take taps around them.
+  with "Switching Wi-Fi on ..." meanwhile; its label toggles it too, and the switches take taps around them. After
+  switching Wi-Fi on, the networks are scanned once it has connected (the list said to switch Wi-Fi on).
 - A 2D engine for the linear frame buffer on port F1E0h (fill, copy, monochrome expansion, `src/t386_accel.h`), for
   a Linux guest whose vesafb uses it: its graphics console prints twice as fast.
 - Linear frame buffer writes: a page is marked for the screen once per refresh, at its first write, then written at

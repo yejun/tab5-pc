@@ -31,7 +31,12 @@ static bool g_scanning = false, g_connect_pending = false, g_touch_block = false
 static int64_t g_reset_armed = 0;   // "Reset PC" tapped once at this time: a second tap within RESET_CONFIRM_MS resets
 // The Wi-Fi switch tapped: on (1) or off (0), done once the panel has shown it (ui_poll): switching on the first time
 // after a restart takes ~2.5 s (the C6's link), with the panel standing still meanwhile. -1: nothing waiting.
+// (Done WIFI_REQUEST_MS after the tap: the switch's knob moves in 120 ms; drawn at once, it stood half-way.)
 static int g_wifi_request = -1;
+static int64_t g_wifi_request_at;
+static constexpr int WIFI_REQUEST_MS = 250;
+// A scan asked for while connecting (it would fail then): done when the attempt has ended (ui_poll)
+static bool g_scan_wanted = false;
 static void ui_wifi_request_do();
 static String g_pending_ssid;
 
@@ -314,13 +319,19 @@ static void ui_fill_list() {
 }
 
 static void ui_start_scan() {
+  g_scan_wanted = false;
   if (g_wifi == WIFI_DISABLED) {
     g_net_count = 0;
     ui_fill_list();
     lv_label_set_text(ui_scan_lbl, "Switch Wi-Fi on to see the networks");
     return;
   }
-  if (g_scanning || g_wifi == WIFI_CONNECTING) return;   // a scan during a connection attempt fails
+  if (g_scanning) return;
+  if (g_wifi == WIFI_CONNECTING) {   // a scan during a connection attempt fails: after it
+    g_scan_wanted = true;
+    lv_label_set_text(ui_scan_lbl, "Connecting - the scan follows ...");
+    return;
+  }
   if (WiFi.scanNetworks(true) == WIFI_SCAN_FAILED) { lv_label_set_text(ui_scan_lbl, "Scan failed - tap Scan to retry"); return; }
   g_scanning = true;
   lv_label_set_text(ui_scan_lbl, "Scanning ...");
@@ -630,8 +641,9 @@ static void ui_poll() {
   ui_connect_poll();
   if (now >= next) { ui_refresh_status(); next = now + 500; }
   lv_timer_handler();
-  if (g_wifi_request >= 0) {   // the panel drawn with the switch as tapped (and "Switching ..."), then the work
-    lv_refr_now(g_disp);
+  if (g_scan_wanted && g_wifi != WIFI_CONNECTING) ui_start_scan();
+  if (g_wifi_request >= 0 && now - g_wifi_request_at >= WIFI_REQUEST_MS) {   // the panel shows the switch as tapped
+    lv_refr_now(g_disp);                                                    // (and "Switching ..."), then the work
     ui_wifi_request_do();
     ui_refresh_status();
     ui_start_scan();
@@ -726,6 +738,7 @@ static void ui_setup() {
   lv_obj_set_pos(ui_wifi_sw, LW - 50 - 80, 104);   // (inside: the frame's 3 and the 22 each side)
   lv_obj_add_event_cb(ui_wifi_sw, [](lv_event_t*) {
     g_wifi_request = lv_obj_has_state(ui_wifi_sw, LV_STATE_CHECKED);   // (done by ui_poll, once shown)
+    g_wifi_request_at = esp_timer_get_time() / 1000;
     ui_refresh_status();
   }, LV_EVENT_VALUE_CHANGED, nullptr);
   ui_switch_label(h2, ui_wifi_sw);
@@ -804,7 +817,9 @@ static void ui_setup() {
   // networks
   lv_obj_t* nc = ui_card(scr, RX, TOP, RW, DY + 222 - TOP);
   ui_scan_lbl = ui_label(nc, "", &px_font_24, C_DIM);
-  lv_obj_set_pos(ui_scan_lbl, 0, 10);
+  lv_obj_set_pos(ui_scan_lbl, 0, 4);
+  lv_obj_set_width(ui_scan_lbl, RW - 50 - 150 - 16);   // (left of Scan, in two lines if need be)
+  lv_label_set_long_mode(ui_scan_lbl, LV_LABEL_LONG_WRAP);
   lv_obj_t* scan = ui_button(nc, LV_SYMBOL_REFRESH "  Scan", [](lv_event_t*) { ui_start_scan(); }, false);
   lv_obj_set_size(scan, 150, 48);
   lv_obj_align(scan, LV_ALIGN_TOP_RIGHT, 0, 0);
