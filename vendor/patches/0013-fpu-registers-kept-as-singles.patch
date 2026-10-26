@@ -1,11 +1,12 @@
 Registers kept as singles: a host's quick ways for single precision (the Tab5 firmware's, on the P4's
 single-precision FPU) keep a register's value as an exact single in sb[], so that it isn't converted to a double
 and back by each instruction; fpget makes the double when tiny386's code reads it (the single kept: the same
-value), fpset and FRSTOR forget the single, FNSAVE makes the doubles first.
-
+value), fpset and FRSTOR forget the single, FNSAVE makes the doubles first; FXCH and FILD m64 (which keep raw values) swap or forget it too.
+diff --git a/fpu.c b/fpu.c
+index 3e89ce7..cab3d1e 100644
 --- a/fpu.c
 +++ b/fpu.c
-@@ -151,6 +151,10 @@
+@@ -151,6 +151,10 @@ struct FPU {
  	F80 rawst[8];
  	u8 rawtagr;
  	u8 rawtagw;
@@ -16,7 +17,7 @@ value), fpset and FRSTOR forget the single, FNSAVE makes the doubles first.
  
  #ifdef I386_ENABLE_SSE
  	u32 mxcsr;
-@@ -190,6 +194,10 @@
+@@ -190,6 +194,10 @@ static double fpget(FPU *fpu, int i)
  {
  	unsigned int idx = (fpu->top + i) & 7;
  	unsigned int mask = 1 << idx;
@@ -27,7 +28,7 @@ value), fpset and FRSTOR forget the single, FNSAVE makes the doubles first.
  	if (!(fpu->rawtagr & mask) && !(fpu->rawtagw & mask)) {
  		fpu->st[idx] = fromf80(fpu->rawst[idx]);
  		fpu->rawtagr |= mask;
-@@ -203,6 +211,9 @@
+@@ -203,6 +211,9 @@ static void fpset(FPU *fpu, int i, double val)
  	unsigned int mask = 1 << idx;
  	fpu->st[idx] = val;
  	fpu->rawtagw |= mask;
@@ -37,7 +38,30 @@ value), fpset and FRSTOR forget the single, FNSAVE makes the doubles first.
  }
  
  static void fppush(FPU *fpu, double val)
-@@ -747,6 +758,9 @@
+@@ -230,6 +241,9 @@ static void fppushi64(FPU *fpu, int64_t v)
+ 	fpu->rawst[fpu->top] = r;
+ 	fpu->rawtagr &= ~(1 << fpu->top);
+ 	fpu->rawtagw &= ~(1 << fpu->top);
++#ifdef T386_FPU_SINGLES
++	fpu->sv &= ~(1 << fpu->top);
++#endif
+ }
+ 
+ static bool fpgeti64(FPU *fpu, int64_t *res)
+@@ -277,6 +291,12 @@ static void fpxch(FPU *fpu, int i, int j)
+ 	fpu->st[jj] = f64;
+ 	fpu->rawtagr = swapbits(fpu->rawtagr, ii, jj);
+ 	fpu->rawtagw = swapbits(fpu->rawtagw, ii, jj);
++#ifdef T386_FPU_SINGLES
++	u32 b = fpu->sb[ii];
++	fpu->sb[ii] = fpu->sb[jj];
++	fpu->sb[jj] = b;
++	fpu->sv = swapbits(fpu->sv, ii, jj);
++#endif
+ }
+ 
+ static void fppop(FPU *fpu)
+@@ -801,6 +821,9 @@ bool fpu_exec2(FPU *fpu, void *cpu, bool opsz16, int op, int group, int seg, uwo
  					return false;
  				fpu->rawtagr &= ~(1 << j);
  				fpu->rawtagw &= ~(1 << j);
@@ -47,7 +71,7 @@ value), fpset and FRSTOR forget the single, FNSAVE makes the doubles first.
  				start += 10;
  			}
  			break;
-@@ -775,6 +789,12 @@
+@@ -829,6 +852,12 @@ bool fpu_exec2(FPU *fpu, void *cpu, bool opsz16, int op, int group, int seg, uwo
  					return false;
  				start += 28;
  			}

@@ -127,6 +127,7 @@ uint32_t t386_vbe_read(VGAState* s, uint32_t offset) {
 
 uint8_t t386_vram_dirty[1024];
 int t386_vram_shift = 11;
+uint32_t t386_vram_epoch;
 uint32_t t386_lfb_base, t386_lfb_size;
 uint8_t* t386_lfb_ram;
 // t386_vram_dirty as the renderer took it (and cleared it), this time and the time before: a piece is looked at in
@@ -180,6 +181,7 @@ static bool nat_vbe(VGAState* s, uint16_t* dst, uint8_t* dirty, int max_w, int m
         seen32[i] = dirty32[i] ? __atomic_exchange_n(&dirty32[i], 0, __ATOMIC_ACQ_REL) : 0;
         pieces[i] = seen32[i] | prev32[i];
     }
+    __atomic_add_fetch(&t386_vram_epoch, 1, __ATOMIC_ACQ_REL);
     const uint8_t* written_pieces = (const uint8_t*)pieces;
     const bool all = force || params != nat_params;
     if (all) {

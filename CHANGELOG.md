@@ -43,6 +43,20 @@
 - The linear frame buffer is mapped by the fast path's TLB straight to video memory, as RAM is: reads by translated
   code and the fast path at RAM speed, writes without a page walk and tiny386's callbacks (still marked for the
   screen). Its place comes from pc.c's BAR callback.
+- The settings panel and the web page in a DOS-era look: the panel like a BIOS setup screen in a pixel font drawn
+  at 2x3 and 3x4 (UNSCII), the web page like a DOS file manager.
+- The settings panel's Wi-Fi switch moves as soon as it is tapped (it waited for Wi-Fi to start, a few seconds),
+  with "Switching Wi-Fi on ..." meanwhile; its label toggles it too, and the switches take taps around them.
+- A 2D engine for the linear frame buffer on port F1E0h (fill, copy, monochrome expansion, `src/t386_accel.h`), for
+  a Linux guest whose vesafb uses it: its graphics console prints twice as fast.
+- Linear frame buffer writes: a page is marked for the screen once per refresh, at its first write, then written at
+  RAM speed until the next refresh (before, every write went through the TLB's slow path to mark its piece).
+- The translator: jumps between blocks in different pages, and blocks whose last instruction runs into the next
+  page, can be linked (serial `jit xlink 3`; off by default for now). Translated code leaves for the dispatcher
+  when tiny386 empties its TLB in place (INVLPG).
+- tiny386 at upstream 003c266 (was 1a8f1e0): FXCH without losing precision, VGA line compare and pel panning,
+  linuxstart's `vga=` option; patches 0002, 0013 and 0015 rebased (0015 now only the 80-bit moves).
+- Serial `ptap x y` (a tap on the settings panel) and `mev dx dy buttons` (a PS/2 mouse event), for testing.
 
 ## 1.0.0 (2026-10-22)
 

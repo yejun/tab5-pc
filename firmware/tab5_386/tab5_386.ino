@@ -606,6 +606,10 @@ static void handle_serial() {
     } else if (line.startsWith("jit hot ")) {   // translate code once reached this many times (t386_jit.h)
       t386_jit_hot = constrain(line.substring(8).toInt(), 0, 255);
       Serial.printf("jit hot %d\n", t386_jit_hot);
+    } else if (line.startsWith("jit xlink ")) {   // the translator's links across pages on or off (t386_jit.h)
+      extern int t386_jit_xlink;
+      t386_jit_xlink = line.substring(10).toInt();
+      Serial.printf("xlink %d\n", t386_jit_xlink);
     } else if (line == "jit 0" || line == "jit 1") {   // the translator on or off (t386_jit.h)
       extern bool t386_jit_enabled;
       t386_jit_enabled = line == "jit 1";
@@ -644,6 +648,16 @@ static void handle_serial() {
                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
       Serial.printf("%s | PC struct %s | guest RAM %p\n", buf, esp_ptr_external_ram(g_pc) ? "PSRAM" : "internal",
                     g_pc->phys_mem);
+    } else if (line.startsWith("ptap ")) {   // ptap <x> <y>: a tap on the settings panel (1280 x 720, landscape)
+      int x = 0, y = 0;
+      sscanf(line.c_str() + 5, "%d %d", &x, &y);
+      g_fake_x = x;
+      g_fake_y = y;
+      g_fake_reads = 4;
+    } else if (line.startsWith("mev ")) {   // mev <dx> <dy> <buttons>: a PS/2 mouse event (dy up; buttons 1 left 2 right)
+      int dx = 0, dy = 0, b = 0;
+      sscanf(line.c_str() + 4, "%d %d %d", &dx, &dy, &b);
+      input_put({1, (int8_t)b, (int16_t)dx, (int16_t)dy});
     } else if (line.startsWith("mouse ")) {   // touchpad speed: PS/2 counts per pixel of finger movement
       g_mouse_gain = constrain(line.substring(6).toFloat(), 0.1f, 8.0f);
       Serial.printf("mouse gain %.2f\n", g_mouse_gain);

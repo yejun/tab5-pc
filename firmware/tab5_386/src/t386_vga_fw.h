@@ -10,6 +10,8 @@
 // interpreter all end in) and the 64 KB window's (t386_vga_write_fast, and vga.c's when it doesn't take them).
 extern uint8_t t386_vram_dirty[1024];
 extern int t386_vram_shift;
+// (one more each time the renderer takes and clears the marks: t386_fast.h's armed pages)
+extern uint32_t t386_vram_epoch;
 
 // The linear frame buffer (BAR 0 of the PCI VGA) while it is mapped: its physical address and size, and its bytes
 // (tiny386's video memory); size 0: unmapped. The fast path maps its pages straight to them (t386_fast.h, ftlb_miss),

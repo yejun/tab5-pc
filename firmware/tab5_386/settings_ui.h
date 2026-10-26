@@ -29,6 +29,10 @@ static lv_obj_t *ui_dc, *ui_fd, *ui_fd_msg, *ui_fd_bar, *ui_fd_btn, *ui_fd_iso, 
                                                                     // FreeDOS (fd_install.h) in their place
 static bool g_scanning = false, g_connect_pending = false, g_touch_block = false;
 static int64_t g_reset_armed = 0;   // "Reset PC" tapped once at this time: a second tap within RESET_CONFIRM_MS resets
+// The Wi-Fi switch tapped: on (1) or off (0), done once the panel has shown it (ui_poll): switching on the first time
+// after a restart takes ~2.5 s (the C6's link), with the panel standing still meanwhile. -1: nothing waiting.
+static int g_wifi_request = -1;
+static void ui_wifi_request_do();
 static String g_pending_ssid;
 
 static void panel_close();
@@ -68,8 +72,18 @@ static void ui_flush(lv_display_t* d, const lv_area_t* a, uint8_t* px) {
   lv_display_flush_ready(d);
 }
 
+// A tap from serial "ptap x y" (the panel's coordinates, landscape): pressed for a few reads, then released
+static int16_t g_fake_x, g_fake_y;
+static int g_fake_reads = 0;
+
 static void ui_touch(lv_indev_t*, lv_indev_data_t* d) {   // M5.update() has run in touch_poll()
   static int16_t lx = 0, ly = 0;
+  if (g_fake_reads > 0) {
+    d->point.x = lx = g_fake_x;
+    d->point.y = ly = g_fake_y;
+    d->state = --g_fake_reads > 0 ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+    return;
+  }
   bool pressed = M5.Touch.getCount() > 0;
   if (pressed) {
     const auto& t = M5.Touch.getDetail(0);
@@ -163,6 +177,7 @@ static lv_obj_t* ui_slider(lv_obj_t* parent, const char* name, int y, int lo, in
 // A square on/off switch: a box with a block that moves
 static void ui_switch_style(lv_obj_t* sw) {
   lv_obj_set_size(sw, 80, 36);
+  lv_obj_set_ext_click_area(sw, 16);   // (a small target on a 5-inch screen)
   lv_obj_set_style_radius(sw, 0, LV_PART_MAIN);
   lv_obj_set_style_radius(sw, 0, LV_PART_INDICATOR);
   lv_obj_set_style_radius(sw, 0, LV_PART_KNOB);
@@ -175,20 +190,36 @@ static void ui_switch_style(lv_obj_t* sw) {
   lv_obj_set_style_pad_all(sw, -5, LV_PART_KNOB);
 }
 
+// A switch's label toggles it too
+static void ui_switch_label(lv_obj_t* label, lv_obj_t* sw) {
+  lv_obj_add_flag(label, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_ext_click_area(label, 12);
+  lv_obj_add_event_cb(label, [](lv_event_t* e) {
+    lv_obj_t* s = (lv_obj_t*)lv_event_get_user_data(e);
+    if (lv_obj_has_state(s, LV_STATE_CHECKED)) lv_obj_remove_state(s, LV_STATE_CHECKED);
+    else lv_obj_add_state(s, LV_STATE_CHECKED);
+    lv_obj_send_event(s, LV_EVENT_VALUE_CHANGED, nullptr);
+  }, LV_EVENT_CLICKED, sw);
+}
+
 // ---- status -------------------------------------------------------------------------------------------------
 
 static void ui_refresh_status() {
-  switch (g_wifi) {
+  if (g_wifi_request >= 0) {   // (the switch as tapped; ui_poll does it)
+    lv_label_set_text(ui_wifi, g_wifi_request ? "Switching Wi-Fi on ..." : "Switching Wi-Fi off ...");
+    lv_obj_set_style_text_color(ui_wifi, lv_color_hex(C_INK), 0);
+  } else switch (g_wifi) {
     case WIFI_DISABLED:        lv_label_set_text(ui_wifi, "Wi-Fi is off: switch it on to copy files"); break;
     case WIFI_NONE:       lv_label_set_text(ui_wifi, "Not set up - choose a network"); break;
     case WIFI_CONNECTING: lv_label_set_text_fmt(ui_wifi, "Connecting to %s ...", g_try_ssid.c_str()); break;
     case WIFI_FAILED:     lv_label_set_text_fmt(ui_wifi, "Could not connect to %s", g_try_ssid.c_str()); break;
     case WIFI_UP:         lv_label_set_text_fmt(ui_wifi, LV_SYMBOL_WIFI "  %s  (%d dBm)", g_ssid.c_str(), (int)WiFi.RSSI()); break;
   }
-  lv_obj_set_style_text_color(ui_wifi, lv_color_hex(g_wifi == WIFI_FAILED ? C_WARN : C_INK), 0);
+  if (g_wifi_request < 0) lv_obj_set_style_text_color(ui_wifi, lv_color_hex(g_wifi == WIFI_FAILED ? C_WARN : C_INK), 0);
   if (g_wifi == WIFI_UP) lv_label_set_text_fmt(ui_addr, "http://%s/", WiFi.localIP().toString().c_str());
   else lv_label_set_text(ui_addr, "-");
-  if (g_wifi == WIFI_DISABLED) lv_obj_remove_state(ui_wifi_sw, LV_STATE_CHECKED);
+  const bool wifi_on = g_wifi_request >= 0 ? g_wifi_request : g_wifi != WIFI_DISABLED;
+  if (!wifi_on) lv_obj_remove_state(ui_wifi_sw, LV_STATE_CHECKED);
   else lv_obj_add_state(ui_wifi_sw, LV_STATE_CHECKED);
   lv_label_set_text(ui_pcstate, pc_state());
   lv_label_set_text(ui_pause_lbl, g_user_pause ? LV_SYMBOL_PLAY "  Resume" : LV_SYMBOL_PAUSE "  Pause");
@@ -558,6 +589,7 @@ static bool g_aspect43 = true;     // the PC's picture at 4:3 (else square pixel
 
 static void panel_close() {
   if (!g_panel_open) return;
+  ui_wifi_request_do();   // (a switch tapped just before)
   ui_hide_modal();
   g_panel_open = false;
   if (WiFi.scanComplete() >= 0) WiFi.scanDelete();
@@ -598,6 +630,19 @@ static void ui_poll() {
   ui_connect_poll();
   if (now >= next) { ui_refresh_status(); next = now + 500; }
   lv_timer_handler();
+  if (g_wifi_request >= 0) {   // the panel drawn with the switch as tapped (and "Switching ..."), then the work
+    lv_refr_now(g_disp);
+    ui_wifi_request_do();
+    ui_refresh_status();
+    ui_start_scan();
+  }
+}
+
+static void ui_wifi_request_do() {
+  if (g_wifi_request < 0) return;
+  const bool on = g_wifi_request;
+  g_wifi_request = -1;
+  wifi_enable(on);
 }
 
 static void ui_setup() {
@@ -680,11 +725,10 @@ static void ui_setup() {
   ui_switch_style(ui_wifi_sw);
   lv_obj_set_pos(ui_wifi_sw, LW - 50 - 80, 104);   // (inside: the frame's 3 and the 22 each side)
   lv_obj_add_event_cb(ui_wifi_sw, [](lv_event_t*) {
-    const bool on = lv_obj_has_state(ui_wifi_sw, LV_STATE_CHECKED);
-    wifi_enable(on);
+    g_wifi_request = lv_obj_has_state(ui_wifi_sw, LV_STATE_CHECKED);   // (done by ui_poll, once shown)
     ui_refresh_status();
-    ui_start_scan();
   }, LV_EVENT_VALUE_CHANGED, nullptr);
+  ui_switch_label(h2, ui_wifi_sw);
   ui_addr = ui_label(st, "", &px_font_24, C_ACCENT);
   lv_obj_set_pos(ui_addr, 0, 150);
   ui_wifi = ui_label(st, "", &px_font_24, C_INK);
@@ -711,6 +755,7 @@ static void ui_setup() {
     g_aspect43 = lv_obj_has_state(ui_aspect_sw, LV_STATE_CHECKED);
     g_prefs.putBool("aspect43", g_aspect43);   // (drawn so when the panel closes: g_redraw_pc)
   }, LV_EVENT_VALUE_CHANGED, nullptr);
+  ui_switch_label(asp, ui_aspect_sw);
   lv_obj_t* dc_cap = ui_caption(scr, "Screen, sound, touchpad", LX, DY, LW);
 
   // an empty card: FreeDOS from freedos.org, in place of the sliders (fd_install.h; shown by ui_refresh_status)

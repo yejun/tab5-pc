@@ -111,9 +111,55 @@ static inline void ftlb_check(CPUI386 *cpu)
 		ftlb = ftlb_for(cpu);
 }
 
-// The linear frame buffer's pages are mapped straight to video memory like RAM, reads at RAM speed; writes go
-// through ftlb_miss (an entry with ctag), which marks the piece they change for the screen (t386_vga_fw.h).
+// The linear frame buffer's pages are mapped straight to video memory like RAM, reads at RAM speed. Writes too, once
+// a page is armed: its first write after the renderer last took the marks comes through ftlb_miss, which marks the
+// whole page for the screen (t386_vga_fw.h) and gives it a write entry; when the renderer takes the marks again
+// (t386_vram_epoch), the armed pages are marked once more (written since, maybe) and lose their write entries
+// (ftlb_lfb_poll, at each run of the fast path or the translator). (Before, each write came through ftlb_miss to mark
+// its piece: a quarter of the time Linux's graphics console spent printing.) With all arming slots taken, a write
+// marks its piece alone, through an entry with ctag.
 #include "t386_vga_fw.h"
+#define FTLB_LFB_ARMED 256
+static struct { struct ftlb_entry *e; uword pg; uint32_t off; } ftlb_lfb_armed[FTLB_LFB_ARMED];
+static int ftlb_lfb_narmed;
+static uint32_t ftlb_lfb_epoch;   // t386_vram_epoch when the first of them was armed
+
+// A write at off (in the frame buffer) through entry e for linear page pg: arm the page (or mark the piece)
+static void ftlb_lfb_write(struct ftlb_entry *e, uword pg, uint32_t off, int size)
+{
+	if (ftlb_lfb_narmed == FTLB_LFB_ARMED) {
+		e->ctag = pg;
+		t386_vram_mark(off, size);
+		return;
+	}
+	if (!ftlb_lfb_narmed)   // (read before the mark: the renderer taking it meanwhile is then seen)
+		ftlb_lfb_epoch = __atomic_load_n(&t386_vram_epoch, __ATOMIC_ACQUIRE);
+	off &= ~0xfffu;
+	t386_vram_mark(off, 0x1000);
+	ftlb_lfb_armed[ftlb_lfb_narmed].e = e;
+	ftlb_lfb_armed[ftlb_lfb_narmed].pg = pg;
+	ftlb_lfb_armed[ftlb_lfb_narmed++].off = off;
+	e->wtag = pg;
+	e->ctag = -1;
+}
+
+static noinline void ftlb_lfb_disarm(void)
+{
+	for (int i = 0; i < ftlb_lfb_narmed; i++) {
+		struct ftlb_entry *e = ftlb_lfb_armed[i].e;
+		t386_vram_mark(ftlb_lfb_armed[i].off, 0x1000);
+		if (e->wtag == ftlb_lfb_armed[i].pg)   // (not another page's entry by now)
+			e->wtag = -1, e->ctag = ftlb_lfb_armed[i].pg;
+	}
+	ftlb_lfb_narmed = 0;
+}
+
+static inline void ftlb_lfb_poll(void)
+{
+	if (ftlb_lfb_narmed && __atomic_load_n(&t386_vram_epoch, __ATOMIC_ACQUIRE) != ftlb_lfb_epoch)
+		ftlb_lfb_disarm();
+}
+
 
 // The host address of a size-byte access at linear address lin, filling the TLB; NULL if tiny386 must do the
 // access: it is not to RAM (VGA memory and other MMIO; the linear frame buffer is, above), crosses a page, or faults
@@ -127,7 +173,7 @@ static noinline u8 *ftlb_miss(CPUI386 *cpu, uword lin, int size, int write)
 	if (write && e->ctag == pg && e->rtag == pg) {   // a page with translated code, written before
 		u8 *host = (u8 *) (uintptr_t) (lin + e->delta);
 		if ((uword) (host - t386_lfb_ram) < t386_lfb_size) {   // (the linear frame buffer)
-			t386_vram_mark(host - t386_lfb_ram, size);
+			ftlb_lfb_write(e, pg, host - t386_lfb_ram, size);
 			return host;
 		}
 		uword paddr = host - cpu->phys_mem;
@@ -151,10 +197,8 @@ static noinline u8 *ftlb_miss(CPUI386 *cpu, uword lin, int size, int write)
 			e->wtag = e->ctag = -1;
 		e->delta = delta;
 		e->rtag = pg;
-		if (write) {
-			e->ctag = pg;
-			t386_vram_mark(paddr - t386_lfb_base + (lin & 0xfff), size);
-		}
+		if (write)
+			ftlb_lfb_write(e, pg, paddr - t386_lfb_base + (lin & 0xfff), size);
 		return (u8 *) (uintptr_t) (lin + delta);
 	}
 	if (in_iomem(paddr) || paddr >= (uword) cpu->phys_mem_size)
@@ -595,6 +639,7 @@ static bool T386_FAST_IRAM fast_exec(CPUI386 *cpu, int stepcount)
 	eip = cpu->next_ip;
 	cpu->ifetch.paddr = 0;
 	ftlb_check(cpu);
+	ftlb_lfb_poll();
 reload:   // after a change of mode, CS or segment registers made outside the handlers below; eip is the next instruction
 	code16 = cpu->code16;
 	pfx0 = code16 ? 3 : 0;
@@ -1798,3 +1843,7 @@ void cpui386_step(CPUI386 *cpu, int stepcount)
 		TRY1(call_isr(cpu, cpu->excno, pusherr, 1));
 	}
 }
+
+// Physical memory moved (the VGA's BAR: the linear frame buffer elsewhere, or off): every translation goes, as at a
+// TLB flush (t386_pc.c's BAR callback; translated code running leaves: jit_after)
+void t386_tlb_forget(void) { t386_tlb_gen++; }

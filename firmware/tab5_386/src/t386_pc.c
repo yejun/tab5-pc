@@ -101,6 +101,7 @@ int t386_ne2000_irq = 9;
 #define isa_ne2000_init(base, irq, pic, f) isa_ne2000_init(base, t386_ne2000_irq, pic, f)
 // ... and the linear frame buffer's place, as pc.c's BAR callback maps it (t386_vga_fw.h)
 static void t386_set_pci_vga_bar(void* opaque, int bar_num, uint32_t addr, bool enabled);
+void t386_tlb_forget(void);   // (t386_fast.h)
 #define vga_pci_init(s, bus, opaque, f) vga_pci_init(s, bus, opaque, t386_set_pci_vga_bar)
 
 #define fprintf t386_fprintf
@@ -131,10 +132,13 @@ static void t386_set_pci_vga_bar(void* opaque, int bar_num, uint32_t addr, bool 
     t386_lfb_base = addr;
     t386_lfb_ram = pc->vga_mem;
     if (enabled) t386_lfb_size = pc->vga_mem_size;
+    t386_tlb_forget();   // (the fast path's TLB may map the old place)
 }
+#include "t386_accel.h"   // (the 2D engine for Linux's graphics console)
 void t386_lfb_hooks(void) {
     t386_cb->iomem_write8 = t386_iomem_write8;
     t386_cb->iomem_write16 = t386_iomem_write16;
     t386_cb->iomem_write32 = t386_iomem_write32;
     t386_cb->iomem_write_string = t386_iomem_write_string;
+    t386_accel_hooks(t386_cb);   // (and the 2D engine's port)
 }

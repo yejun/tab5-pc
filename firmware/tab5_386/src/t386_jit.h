@@ -493,11 +493,15 @@ typedef struct JitBlock {
 	u8 dead;                // invalidated (its code stays until the cache is emptied)
 	u8 checked;             // self-checking (self-modifying code: see jit_translate), not invalidated by writes
 	u8 fails;               // ... and how often its first instruction was found changed
+	u8 crossing;            // with paging, its last instruction runs on into the next page, which (as found then)
+	                        // lies after its page in RAM: jit_crossing_ok
 	u16 nbytes;             // x86 code bytes from lin
 	u32 born;               // cpu->cycle when it was translated
 	u32 dyn[4];             // rewritten immediates it reads where they are (physical address << 3 | size): writes
 	                        // to just those don't invalidate it
 	u32 *code;
+	u32 *xentry;            // with paging, the entry for jumps from other pages (jit_xentry), or NULL
+	u32 xepoch, xmap;       // ... and what it checks: ftlb_flushes and the TLB when the dispatcher last found it
 	struct JitBlock *hnext;     // in the table
 	struct JitBlock *pnext[2];  // in the lists of the (up to two) pages its code lies on
 	struct JitBlock *bnext;     // in its bucket's list (jit_buckets)
@@ -795,7 +799,7 @@ static bool jit_init(CPUI386 *cpu)
 	jit_smc = (struct JitSmc *) t386_jit_alloc(sizeof(*jit_smc) * JIT_SMC);
 	jit_dynimm = (struct JitDynimm *) t386_jit_alloc(sizeof(*jit_dynimm) * JIT_DYNIMM);
 	jit_heat = (u8 *) t386_jit_alloc(8192);
-	if (!jit_cache || !jit_blocks || !jit_links || !jit_page_blocks || !jit_buckets || !map || !jit_codelines ||
+	if (!jit_cache || !jit_blocks || !jit_hash || !jit_links || !jit_page_blocks || !jit_buckets || !map || !jit_codelines ||
 	    !jit_smc || !jit_dynimm || !jit_heat) {
 		fprintf(stderr, "jit: no memory, not used\n");
 		t386_jit_enabled = false;
@@ -852,6 +856,63 @@ static void jit_patch_jump(u32 *slot, const u32 *target)
 	slot[1] = RV_I(lo, T6, 0, X0, 0x67);                       // jalr x0, lo(t6)
 	t386_jit_sync(slot, 8);
 	JIT_SUM_OF(slot);
+}
+
+// With paging, a direct jump into another page's block goes through that block's xentry, made here when it is first
+// linked so: it goes on into the block if no TLB flush came since the dispatcher last found the block for its linear
+// address (its physical page as then: an OS changes page tables, then empties the TLB) and the TLB is the one for the
+// same privilege level; else it leaves for the dispatcher (EXIT_JUMP), which finds the block anew (and brings the
+// two words up to date) or another one. The jump cache's entries hold as long, by the same reasoning (jit_ijc_unmap).
+// (Before, these jumps all went through the dispatcher: some 30 thousand a second while Linux's console prints.)
+// Off by default (2026-10-25): with them on, Linux crashed the translator under qemu-riscv32 in 6 of 8 runs (none
+// in 2 runs with them off), and the firmware stopped twice on the Tab5; not found yet. "jit xlink 3" on the Tab5
+// for trying.
+#ifndef T386_JIT_XLINK
+#define T386_JIT_XLINK 0
+#endif
+int t386_jit_xlink = T386_JIT_XLINK;   // (serial "jit xlink N") 1: links into other pages' blocks (jit_xentry); 2: blocks across a
+                          // page's end (jit_crossing_ok)
+static u32 *jit_xentry(JitBlock *b)
+{
+	if (!(t386_jit_xlink & 1)) return NULL;
+#ifdef T386_TRACE
+	return NULL;   // (the code sums take what follows a block for its own: jit_sums_check)
+#endif
+	if (b->xentry) return b->xentry;
+	if (jit_cache_end - jit_cache_free < 4096 + (56 << 10) / 4 + 32) return NULL;   // (what jit_translate leaves free)
+	u32 *x = jit_cache_free;
+	jp = x;
+	jlimit = x + 32;
+	joverflow = false;
+	b->xepoch = ftlb_flushes;
+	b->xmap = (u32) (uintptr_t) ftlb;
+	e_li(T6, (u32) (uintptr_t) &b->xepoch);
+	e_lw(A0, T6, 0);
+	e_lw(A1, T6, 4);
+	u32 *other_tlb = e_branch(BNE, A1, R_MAP);
+	e_li(A1, (u32) (uintptr_t) &ftlb_flushes);
+	e_lw(A1, A1, 0);
+	u32 *flushed = e_branch(BNE, A0, A1);
+	{
+		int off = (int) ((const u8 *) b->code - (const u8 *) jp);
+		s32 lo = (s32) ((u32) off << 20) >> 20;
+		e_auipc(T6, (u32) off - (u32) lo);
+		e_jalr(X0, T6, lo);
+	}
+	j_bind(other_tlb, jp);
+	j_bind(flushed, jp);
+	e_li(A1, b->lin - b->cs_base);   // (the eip)
+	e_li(A0, EXIT_JUMP);
+	{
+		u32 t = (u32) (uintptr_t) t386_jit_exit;
+		s32 lo = (s32) (t << 20) >> 20;
+		e_lui(T6, t - (u32) lo);
+		e_jalr(X0, T6, lo);
+	}
+	if (joverflow) return NULL;
+	jit_cache_free = jp;
+	t386_jit_sync(x, (u8 *) jp - (u8 *) x);
+	return b->xentry = x;
 }
 
 // Unlink every jump into b (they go back to their stubs) and take it out of the table and the page lists.
@@ -2590,6 +2651,7 @@ struct JitBefore {
 	bool code16;
 	int cpl;
 	long inv;
+	unsigned tlb_gen;   // t386_tlb_gen (tiny386's TLB emptied: INVLPG)
 };
 static void jit_before(CPUI386 *cpu, struct JitBefore *b)
 {
@@ -2605,6 +2667,7 @@ static void jit_before(CPUI386 *cpu, struct JitBefore *b)
 	b->code16 = cpu->code16;
 	b->cpl = cpu->cpl;
 	b->inv = jit_stat_invalidated;
+	b->tlb_gen = t386_tlb_gen;
 }
 static int jit_after(CPUI386 *cpu, const struct JitBefore *b, bool ok, uword next);
 
@@ -2652,6 +2715,11 @@ static int jit_after(CPUI386 *cpu, const struct JitBefore *b, bool ok, uword nex
 		return 1;
 	if (cpu->cr0 != b->cr0 || cpu->cr3 != b->cr3 || (cpu->flags & VM) != b->vm || cpu->code16 != b->code16 ||
 	    cpu->sp_mask != b->sp_mask || (cpu->flags & IOPL) != b->iopl || cpu->cpl != b->cpl)
+		return jit_stat_ileave[0]++, 1;
+	// tiny386 emptied its TLB (INVLPG): the block leaves, the mapping of its own code may be another now (the fast
+	// path, after the instruction, may already have emptied its TLB and the jump cache: compared with before, not
+	// with ftlb_gen)
+	if (t386_tlb_gen != b->tlb_gen)
 		return jit_stat_ileave[0]++, 1;
 	if ((b->cr0 & 1) && !b->vm) {   // protected mode: blocks check on entry that the segments they use aren't null
 		if (cpu->seg[SEG_SS].sel != b->ss_sel || cpu->seg[SEG_SS].base != b->ss_base) return jit_stat_ileave[1]++, 1;
@@ -4892,9 +4960,23 @@ static JitBlock *jit_translate(CPUI386 *cpu, uword eip, uword lin, u8 mode, int 
 	}
 	return b;
 }
+static uword jit_code_phys(CPUI386 *cpu, uword lin);
+
+// A block whose last instruction runs on into the next page (jit_translate_n): it holds while that page still lies
+// after the block's own in RAM. (Translated so like code without paging, its bytes in one stretch of RAM, written
+// there as such; the dispatcher checks this before it enters the block, and other blocks jump into it through its
+// xentry, which leaves for the dispatcher after a TLB flush. Linux's memmove has an instruction across a page, run
+// for every 16 bytes it moves: before, each time by the interpreter, from the dispatcher.)
+static bool jit_crossing_ok(CPUI386 *cpu, JitBlock *b)
+{
+	const uword next = (b->lin | 0xfff) + 1;
+	return jit_code_phys(cpu, next) == (b->phys | 0xfff) + 1;
+}
+
 static JitBlock *jit_translate_n(CPUI386 *cpu, uword eip, uword lin, u8 mode, int max_ins, uword phys)
 {
 	const bool paged = mode & JM_PAGED;
+	bool crossing = false;
 	// Code that keeps being rewritten soon after it was translated (jit_volatile) is translated to check itself
 	// instead (a program that writes a RETF into its compiled scalers and restores it, for every column drawn).
 	bool checked = jit_volatile(phys);
@@ -4905,9 +4987,16 @@ static JitBlock *jit_translate_n(CPUI386 *cpu, uword eip, uword lin, u8 mode, in
 	while (n < max_ins && bytes < 1024) {
 		uword l = lin + bytes, pl = phys + bytes;
 		int avail = 15;
-		if (paged) {   // the page's end ends the block
+		if (paged) {   // the page's end ends the block (an instruction across it too, but the last: jit_crossing_ok)
 			if ((l >> 12) != (lin >> 12)) break;
-			if (0x1000 - (l & 0xfff) < 15) avail = 0x1000 - (l & 0xfff);
+			if (0x1000 - (l & 0xfff) < 15) {
+				const uword next = (pl | 0xfff) + 1;
+				if ((t386_jit_xlink & 2) && next < (uword) cpu->phys_mem_size && !pm_io(next >> 12) &&
+				    jit_code_phys(cpu, (l | 0xfff) + 1) == next)
+					avail = 15;
+				else
+					avail = 0x1000 - (l & 0xfff);
+			}
 		} else {   // up to the next page that isn't RAM
 			if (l >= (uword) cpu->phys_mem_size || pm_io(l >> 12)) break;
 			uword next_page = (l | 0xfff) + 1;
@@ -4943,13 +5032,17 @@ static JitBlock *jit_translate_n(CPUI386 *cpu, uword eip, uword lin, u8 mode, in
 		// (with paging, any access may fault; without, a write may find translated code there: jit_h_write; and
 		// without memory, DIV may fault, and MOV to a segment register in protected mode)
 		in->may_exit = jt_rmw_ins(in) || checked || paged || (jt_segs_used(in) && !jt_reads_only(in)) ||
-			       (in->kind == K_MULDIV && in->reg >= 6) || in->kind == K_FPU ||
+			       (in->kind == K_MULDIV && in->reg >= 6) || in->kind == K_FPU || in->kind == K_FWAIT ||
 			       (in->kind == K_MOVSEG && in->op == 0x8e && (mode & JM_PROTECTED));
 		// two after an STI: the block may leave before it, for an interrupt (the flags must be there)
 		if (n >= 2 && jt_is_sti(&jt_ins[n - 2])) in->may_exit = true;
 		n++;
 		cur += in->len;
 		bytes += in->len;
+		if (paged && ((l & 0xfff) + in->len > 0x1000)) {   // (a jump too: before the break for one that ends)
+			crossing = true;
+			break;
+		}
 		if (ends) break;
 	}
 	if (n && (jt_is_movss(&jt_ins[n - 1]) || jt_is_sti(&jt_ins[n - 1]))) {
@@ -5063,6 +5156,7 @@ static JitBlock *jit_translate_n(CPUI386 *cpu, uword eip, uword lin, u8 mode, in
 	b->born = cpu->cycle;
 	memcpy(b->dyn, dyn, sizeof dyn);
 	b->checked = checked;
+	b->crossing = crossing && (bytes + (lin & 0xfff) > 0x1000);
 	b->code = code;
 #if defined(T386_JIT_SIZES) && !defined(ESP_PLATFORM)   // (some blocks' code, to look at: riscv32 objdump -b binary -m riscv:rv32 -D)
 	{
@@ -5374,6 +5468,7 @@ static bool jit_exec_in(CPUI386 *cpu, int stepcount)
 	if (!t386_jit_enabled || (!jit_ready && !jit_init(cpu))) return fast_exec(cpu, stepcount);
 	int budget = stepcount;
 	ftlb_check(cpu);
+	ftlb_lfb_poll();
 	while (budget > 0) {
 		uword eip = cpu->next_ip, cs_base = cpu->seg[SEG_CS].base, lin = cs_base + eip;
 		u8 mode = jit_mode_of(cpu);
@@ -5397,6 +5492,10 @@ static bool jit_exec_in(CPUI386 *cpu, int stepcount)
 #endif
 		if (phys != (uword) -1) {
 			b = jit_find(lin, cs_base, mode, phys);
+			if (b && b->crossing && !jit_crossing_ok(cpu, b)) {   // (the next page is elsewhere now)
+				jit_invalidate(b);
+				b = NULL;
+			}
 			if (!b && !jit_warm(phys, true)) cold = true;
 			else if (!b) {
 				b = jit_translate(cpu, eip, lin, mode, JIT_MAX_INS, phys);
@@ -5415,6 +5514,10 @@ static bool jit_exec_in(CPUI386 *cpu, int stepcount)
 		JIT_TR(b ? TR_BLOCK : cold ? TR_COLD : TR_INTERP, lin, cpu->seg[SEG_CS].sel << 16 | (eip & 0xffff),
 		       b ? (u32) (uintptr_t) b->code : cpu->gprx[4].r32);
 		if (b) {
+			if (b->xentry && (mode & JM_PAGED)) {   // (found for its linear address with this TLB: jit_xentry)
+				b->xepoch = ftlb_flushes;
+				b->xmap = (u32) (uintptr_t) ftlb;
+			}
 			jit_nullsegs_now = fast_nullsegs(cpu);
 			jit_run_mode = mode;
 			jit_exception = false;
@@ -5436,10 +5539,11 @@ static bool jit_exec_in(CPUI386 *cpu, int stepcount)
 				uword tlin = cs_base + cpu->next_ip, tphys = tlin;
 				// (not to a block of the other JM_FLAT: a translated segment load may have changed it)
 				JitBlock *from = jit_block_of(jit_link_slot);
-				bool linkable = from && !((from->mode ^ mode) & JM_FLAT);
-				if (mode & JM_PAGED) {   // linked only within a page: the mapping is the same for both blocks
+				bool linkable = from && !((from->mode ^ mode) & JM_FLAT), other_page = false;
+				if (mode & JM_PAGED) {   // within a page the mapping is the same for both blocks; else jit_xentry
 					tphys = jit_code_phys(cpu, tlin);
-					linkable = linkable && (from->lin >> 12) == (tlin >> 12) && from->mode == mode;
+					linkable = linkable && from->mode == mode;
+					other_page = (from->lin >> 12) != (tlin >> 12);
 					if (tphys == (uword) -1) break;
 				}
 				JitBlock *t = jit_find(tlin, cs_base, mode, tphys);
@@ -5448,12 +5552,15 @@ static bool jit_exec_in(CPUI386 *cpu, int stepcount)
 					if (t) jit_stat_translated++;
 				}
 				// (if translating emptied the cache, the exit is gone)
-				if (t && linkable && gen == jit_generation && jit_nlinks < JIT_MAX_BLOCKS * 2) {
+				if (t && t->crossing && !jit_crossing_ok(cpu, t)) t = NULL;
+				u32 *dest = t && (other_page || t->crossing) && linkable && gen == jit_generation
+					    ? jit_xentry(t) : t ? t->code : NULL;
+				if (dest && linkable && gen == jit_generation && jit_nlinks < JIT_MAX_BLOCKS * 2) {
 					JitLink *l = &jit_links[jit_nlinks++];
 					l->slot = jit_link_slot;
 					l->next = t->links;
 					t->links = l;
-					jit_patch_jump(jit_link_slot, t->code);
+					jit_patch_jump(jit_link_slot, dest);
 					jit_stat_links++;
 				}
 				break;
