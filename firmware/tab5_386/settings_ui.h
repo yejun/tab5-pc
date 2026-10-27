@@ -236,7 +236,7 @@ static void ui_refresh_status() {
     lv_obj_set_pos(lv_obj_get_parent(ui_reset_lbl), 0, 36);
   }
   char batt[128];
-  battery_text(batt, sizeof(batt));
+  battery_text_short(batt, sizeof(batt));
   if (strcmp(lv_label_get_text(ui_batt), batt)) lv_label_set_text(ui_batt, batt);
   const bool low = g_batt.presence.state == BatteryPresence::Present && g_batt.level <= 15 && !g_batt.external;
   lv_obj_set_style_text_color(ui_batt, lv_color_hex(low ? 0x8a1208 : C_BLACK), 0);   // (on the title bar)

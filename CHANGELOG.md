@@ -67,6 +67,8 @@
   running from the card until just before, the card was sometimes missing (the PC started without disks) or the
   start hung, until the Tab5 was switched off; 3 in 30 restarts. The Tab5 now restarts through deep sleep, a fuller
   reset (30 of 30 found the card and Wi-Fi), and once more that way if the card is missing after a panic.
+- Settings panel: the battery's state fits its title bar ("Charging 82% - ~0 h 37 min to full"); it took two lines,
+  the second cut off. Volts and milliamps stay in the serial and web status.
 - The PC's network is there from the start, Wi-Fi on or off (it started with Wi-Fi): with Wi-Fi off the PC still gets
   its address by DHCP, instead of its DHCP client waiting for a server that wasn't there (some systems stopped at a
   message about it). The DNS server handed out is now the Tab5 itself, relaying to the Wi-Fi network's DNS server of

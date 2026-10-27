@@ -88,3 +88,22 @@ static void battery_text(char* out, size_t n) {
   snprintf(out, n, "%s  \xe2\x80\xa2  %.2f V  %+d mA%s     %s%s  %d%%", state, b.mv / 1000.0f, b.ma, est,
            b.external ? LV_SYMBOL_CHARGE " " : "", icon, b.level);
 }
+// The same for the settings panel's title bar: shorter (about 44 characters fit), in ASCII (its pixel font has no
+// bullets or battery symbols)
+static void battery_text_short(char* out, size_t n) {
+  const Battery& b = g_batt;
+  if (b.presence.state != BatteryPresence::Present) {
+    snprintf(out, n, b.presence.state == BatteryPresence::Absent ? "USB power, no battery" : "Checking battery ...");
+    return;
+  }
+  float hours = -1;
+  if (b.charging && b.ma_avg > 50) hours = (100 - b.level) / 100.0f * BATT_MAH / b.ma_avg;
+  else if (!b.external && b.ma_avg < -30) hours = b.level / 100.0f * BATT_MAH / -b.ma_avg;
+  char est[40] = "";
+  if (hours >= 0) {
+    const int m = (int)(hours * 60 + 0.5f);
+    snprintf(est, sizeof(est), " - ~%d h %02d min %s", m / 60, m % 60, b.charging ? "to full" : "left");
+  }
+  const char* state = b.charging ? "Charging" : b.external ? (b.level >= 95 ? "Full" : "Plugged in") : "Battery";
+  snprintf(out, n, "%s %d%%%s", state, b.level, est);
+}
