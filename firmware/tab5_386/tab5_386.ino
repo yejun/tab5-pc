@@ -843,10 +843,6 @@ static void load_config(PCConfig& conf, bool have_sd) {
   conf.fill_cmos = 1;
   // an installer running (fd_install.h), and now a system on C.IMG: the install is over
   if (have_sd && ini_parse(FD_INI, fd_ini_handler, &g_install_mode) == 0 && g_install_mode) fd_install_finish();
-  if (g_install_mode) {   // (fd_install.h: an installer running)
-    t386_jit_enabled = false;
-    Serial.println("install: an installer is running: the translator is off until it is done");
-  }
   if (have_sd && ini_parse("/sdcard/tiny386.ini", parse_conf_ini, &conf) == 0) {
     Serial.println("config: /sdcard/tiny386.ini");
     ini_parse("/sdcard/tiny386.ini", ne2000_ini_handler, nullptr);

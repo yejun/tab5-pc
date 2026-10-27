@@ -103,8 +103,9 @@ Making an empty card turn into a working PC took more than downloading an instal
   restarts the PC after formatting.
 - **Finish the install for the user.** When the PC restarts with a system on C:, the Tab5 rewrites `tiny386.ini`,
   removes the installer's files, and adjusts `FDAUTO.BAT` (no CD driver without a CD drive, the right `BLASTER`).
-- **Installs run without the translator.** In testing, two of five installs with it on stopped partway; with the
-  fast interpreter alone none did, at the cost of a longer install.
+- **Installs run with the translator.** For a while they ran without it: two of five installs with it on had
+  stopped partway. That came from the code sync (see "New code must be made visible to instruction fetch"); since
+  that fix, an install with it on copies in about 8 minutes.
 
 ## Working with the device
 

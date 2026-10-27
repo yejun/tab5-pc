@@ -31,11 +31,9 @@ static volatile int g_fd_pct = 0;       // the download's progress
 static char g_fd_msg[120] = "";         // what it is doing, or why it failed (the settings panel shows it)
 static bool g_setup_needed = false;     // no disks on the card (load_config): the panel offers the install
 // tiny386.ini's [tab5] install: 1, FreeDOS's installer is running (from FDSETUP.IMG); 2, the PC starts from an
-// installer CD, and C.IMG has no system yet. Meanwhile the translator is off (load_config) and the fast path runs
-// the installer: in testing, two of five installs with the translator on stopped partway (see T386_JIT_HOLD in
-// tab5_386.ino); none since. An install takes longer this way, and it is done once.
+// installer CD, and C.IMG has no system yet. (Installs ran with the translator off for a while: two of five had
+// stopped partway, from the code sync fixed since, src/t386_i386.c.)
 static int g_install_mode = 0;
-extern bool t386_jit_enabled;
 static char g_fd_iso[80] = "";          // an installer CD image at the card's root (an empty card): offered as well
 static bool g_fd_from_iso = false;      // the install asked for: from g_fd_iso (else FreeDOS's download)
 
@@ -380,7 +378,7 @@ static bool fd_install_finish() {
     }
     if (!fd_write_file(FD_INI, ini.c_str())) return false;
     g_install_mode = 0;
-    Serial.println("install: a system is on C.IMG; the translator is on again");
+    Serial.println("install: a system is on C.IMG");
     return true;
   }
   fd_fix_startup(false);

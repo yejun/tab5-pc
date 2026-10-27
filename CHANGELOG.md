@@ -61,6 +61,8 @@
   routine does (this build linked the ROM's). With one pass, new code occasionally ran as first emitted, before its
   jumps were patched: the rare stops in long runs of programs that redraw the whole screen. A 4-minute game demo 20
   times over and a DOS stress loop for 44 minutes ran without one (before, a stop within a few runs).
+- FreeDOS's installer runs with the translator on again (it ran with it off after two of five installs had stopped
+  partway, from the code sync above): copying took about 8 minutes.
 - The PC's network is there from the start, Wi-Fi on or off (it started with Wi-Fi): with Wi-Fi off the PC still gets
   its address by DHCP, instead of its DHCP client waiting for a server that wasn't there (some systems stopped at a
   message about it). The DNS server handed out is now the Tab5 itself, relaying to the Wi-Fi network's DNS server of
