@@ -53,7 +53,7 @@
 - Linear frame buffer writes: a page is marked for the screen once per refresh, at its first write, then written at
   RAM speed until the next refresh (before, every write went through the TLB's slow path to mark its piece).
 - The translator: jumps between blocks in different pages, and blocks whose last instruction runs into the next
-  page, can be linked (serial `jit xlink 3`; off by default for now). Translated code leaves for the dispatcher
+  page, are linked (serial `jit xlink 0` turns that off). Translated code leaves for the dispatcher
   when tiny386 empties its TLB in place (INVLPG).
 - tiny386 at upstream 003c266 (was 1a8f1e0): FXCH without losing precision, VGA line compare and pel panning,
   linuxstart's `vga=` option; patches 0002, 0013 and 0015 rebased (0015 now only the 80-bit moves).

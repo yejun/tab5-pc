@@ -864,11 +864,12 @@ static void jit_patch_jump(u32 *slot, const u32 *target)
 // same privilege level; else it leaves for the dispatcher (EXIT_JUMP), which finds the block anew (and brings the
 // two words up to date) or another one. The jump cache's entries hold as long, by the same reasoning (jit_ijc_unmap).
 // (Before, these jumps all went through the dispatcher: some 30 thousand a second while Linux's console prints.)
-// Off by default (2026-10-25): with them on, Linux crashed the translator under qemu-riscv32 in 6 of 8 runs (none
-// in 2 runs with them off), and the firmware stopped twice on the Tab5; not found yet. "jit xlink 3" on the Tab5
-// for trying.
+// On by default. They were off for a while: Linux crashed the translator under qemu-riscv32 with them on, and the
+// firmware stopped twice on the Tab5. But qemu crashed with them off too, and the stops came from the code sync
+// (t386_i386.c, since fixed); since then Linux ran 12 boots with a mixed load with them on, no failure. Serial
+// "jit xlink 0" turns them off.
 #ifndef T386_JIT_XLINK
-#define T386_JIT_XLINK 0
+#define T386_JIT_XLINK 3
 #endif
 int t386_jit_xlink = T386_JIT_XLINK;   // (serial "jit xlink N") 1: links into other pages' blocks (jit_xentry); 2: blocks across a
                           // page's end (jit_crossing_ok)
