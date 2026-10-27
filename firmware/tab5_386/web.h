@@ -168,7 +168,7 @@ static void restart_tab5() {
   { DiskLock l; disk_close(); }
   if (g_wifi != WIFI_DISABLED) g_prefs.putBool("wifiback", true);
   delay(300);
-  ESP.restart();
+  tab5_restart();
 }
 
 // Stop the PC until the Tab5 restarts, like switching it off: what it wrote to its images is on the card, and it

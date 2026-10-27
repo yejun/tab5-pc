@@ -134,6 +134,16 @@ static void pc_set_paused(bool on) {
   pc_hold(on);
 }
 
+// Restart the Tab5 more thoroughly than ESP.restart: "a moment of deep sleep", which on the Tab5 tested (chip v1.3)
+// ended at once in a watchdog reset of the HP system (rst:0x7 HP_SYS_HP_WDT_RESET, wakeup cause 0), not a wake;
+// either resets more than ESP.restart's software reset. After ESP.restart with the PC running from the card until just before,
+// the card was now and then missing or the start hung (the card and the Wi-Fi link share the SDMMC host), until the
+// Tab5 was switched off: 3 in 30 restarts. This way, 30 of 30 found both.
+static void tab5_restart() {
+  Serial.flush();
+  esp_deep_sleep(100000);
+}
+
 #include "net.h"
 #include "guest_net.h"
 // An option for builds: core 0's cache maintenance on PSRAM (esp_cache_msync, and that of the PPA's and the card's
@@ -814,7 +824,15 @@ static void display_task(void*) {
 static bool sd_mount() {
   // SD_MMC slot 0 on the P4's fixed pins; the board variant powers the card (LDO channel 4)
   if (SD_MMC.begin("/sdcard", false, false, SDMMC_FREQ_HIGHSPEED)) return true;
-  return SD_MMC.begin("/sdcard", false, false, SDMMC_FREQ_DEFAULT);
+  if (SD_MMC.begin("/sdcard", false, false, SDMMC_FREQ_DEFAULT)) return true;
+  // After a software reset (a panic) the card can be missing until a fuller reset: tab5_restart's way finds it.
+  // Once (the reset reason is a watchdog's then): a Tab5 without a card goes on without one.
+  const esp_reset_reason_t r = esp_reset_reason();
+  if (r == ESP_RST_SW || r == ESP_RST_PANIC || r == ESP_RST_INT_WDT || r == ESP_RST_TASK_WDT) {
+    Serial.println("SD card: not found after a restart: restarting more thoroughly");
+    tab5_restart();
+  }
+  return false;
 }
 
 static bool file_exists(const char* path) {
@@ -887,7 +905,8 @@ void setup() {
   cfg.internal_spk = true;   // configured here, switched on only while there is sound (audio.h)
   M5.begin(cfg);
   audio_setup();
-  Serial.printf("\nTab5 PC %s (reset reason %d)\n", FIRMWARE_VERSION, (int)esp_reset_reason());
+  Serial.printf("\nTab5 PC %s (reset reason %d, wakeup cause %d)\n", FIRMWARE_VERSION, (int)esp_reset_reason(),
+                (int)esp_sleep_get_wakeup_cause());
   kbd_begin();
   usb_kbd_setup();
   g_rot = kbd_present_at_boot() ? 3 : 1;   // docked in the keyboard, the Tab5 is upside down
@@ -967,7 +986,7 @@ void loop() {
     if (g_gnet_rx && uxQueueMessagesWaiting(g_gnet_rx)) guest_net_deliver();
     if (g_install_mode && g_pc->reset_request && fd_install_finish()) {   // an install done (fd_install.h): restart
       delay(500);
-      ESP.restart();
+      tab5_restart();
     }
     if (g_pc->reset_request && !g_cold_reset) {   // the guest asked for a reset (port 92h, the keyboard controller):
       // where it was, for serial "cpu" (a program that crashed into a reboot)

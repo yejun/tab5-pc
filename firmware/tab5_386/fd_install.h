@@ -532,7 +532,7 @@ static void fd_install_task(void*) {
     }
     fd_say(g_fd_from_iso ? "Done. Restarting from the CD ..." : "Done. Restarting into FreeDOS's installer ...");
     delay(1500);
-    ESP.restart();
+    tab5_restart();
   }
 }
 
