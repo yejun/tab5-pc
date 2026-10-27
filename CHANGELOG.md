@@ -72,6 +72,9 @@ fixes. Firmware images with their notices and corresponding source, as for 1.0.0
   reset (30 of 30 found the card and Wi-Fi), and once more that way if the card is missing after a panic.
 - Settings panel: the battery's state fits its title bar ("Charging 82% - ~0 h 37 min to full"); it took two lines,
   the second cut off. Volts and milliamps stay in the serial and web status.
+- `tools/fetch_vendor.sh` applies ESP-Hosted's patch in a clone of this repository too: run inside another
+  repository's work tree, `git apply` skipped the file and still reported success, so a build from a clone had the
+  Wi-Fi link's driver unpatched (the 1.0.0 images were not affected).
 - The PC's network is there from the start, Wi-Fi on or off (it started with Wi-Fi): with Wi-Fi off the PC still gets
   its address by DHCP, instead of its DHCP client waiting for a server that wasn't there (some systems stopped at a
   message about it). The DNS server handed out is now the Tab5 itself, relaying to the Wi-Fi network's DNS server of

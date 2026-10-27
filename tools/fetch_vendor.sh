@@ -49,6 +49,9 @@ for f in host/drivers/transport/sdio/sdio_drv.c host/drivers/transport/sdio/sdio
   mkdir -p "esp-hosted/$(dirname "$f")"
   curl -sfL -o "esp-hosted/$f" "https://raw.githubusercontent.com/espressif/esp-hosted-mcu/$HCOMMIT/$f"
 done
+# (esp-hosted made a repository of its own first: run inside another one's work tree, as vendor/ is in a clone,
+# git apply skips every file, as outside the directory it runs in, and still succeeds)
+git -C esp-hosted init -q
 for p in patches/esp-hosted/*.patch; do
   (cd esp-hosted && git apply "../$p") && echo "applied $p"
 done
