@@ -57,6 +57,10 @@
   when tiny386 empties its TLB in place (INVLPG).
 - tiny386 at upstream 003c266 (was 1a8f1e0): FXCH without losing precision, VGA line compare and pel panning,
   linuxstart's `vga=` option; patches 0002, 0013 and 0015 rebased (0015 now only the 80-bit moves).
+- The translator's code sync writes back and drops cache lines twice, as ESP-IDF's own version of the write-back
+  routine does (this build linked the ROM's). With one pass, new code occasionally ran as first emitted, before its
+  jumps were patched: the rare stops in long runs of programs that redraw the whole screen. A 4-minute game demo 20
+  times over and a DOS stress loop for 44 minutes ran without one (before, a stop within a few runs).
 - The PC's network is there from the start, Wi-Fi on or off (it started with Wi-Fi): with Wi-Fi off the PC still gets
   its address by DHCP, instead of its DHCP client waiting for a server that wasn't there (some systems stopped at a
   message about it). The DNS server handed out is now the Tab5 itself, relaying to the Wi-Fi network's DNS server of

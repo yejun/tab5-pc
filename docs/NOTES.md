@@ -40,7 +40,10 @@ Lessons:
   translating the same block again and again.
 - **New code must be made visible to instruction fetch.** After writing translated code through the data cache,
   the lines are written back to the shared L2 and the instruction cache's lines dropped (with fences), under the same
-  lock the system's cache operations use.
+  lock the system's cache operations use. Each step is done twice, as ESP-IDF's own version of the ROM's write-back
+  routine does: with one pass, translated code now and then ran as first emitted, before its jumps were patched
+  (the occasional stops in long runs of programs that redraw the whole screen; caught with a debugger over the
+  Tab5's USB port, a branch still pointing at itself while memory held it patched).
 - **Single precision where it is exact.** The ESP32-P4 has a single-precision FPU. When the x87's precision control
   asks for single precision and the operands and result are normal singles, the FPU gives the x87's result; anything
   else (zeros, denormals, overflow) takes the exact software path.
@@ -102,14 +105,6 @@ Making an empty card turn into a working PC took more than downloading an instal
   removes the installer's files, and adjusts `FDAUTO.BAT` (no CD driver without a CD drive, the right `BLASTER`).
 - **Installs run without the translator.** In testing, two of five installs with it on stopped partway; with the
   fast interpreter alone none did, at the cost of a longer install.
-
-## Open questions
-
-- **Occasional stops with translated code running.** In long runs of programs that redraw the whole screen
-  continuously, the PC occasionally stopped while running translated code, with core 0 doing cache maintenance on
-  PSRAM at the time. The cause has not been established; it may well be in this firmware. Builds with
-  `-DT386_JIT_HOLD=1` or `2` keep that maintenance apart from translated code and made it rarer, at some cost in
-  speed (see `tab5_386.ino`). Ordinary DOS use hasn't shown it.
 
 ## Working with the device
 

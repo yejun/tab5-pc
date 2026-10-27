@@ -139,8 +139,8 @@ static void pc_set_paused(bool on) {
 // An option for builds: core 0's cache maintenance on PSRAM (esp_cache_msync, and that of the PPA's and the card's
 // drivers) can be kept apart from translated code, which also lives in PSRAM (t386_jit.h, t386_jit_hold_on: core 1
 // runs the fast path meanwhile). In long tests, programs that redraw the whole screen all the time occasionally
-// stopped with translated code running; the cause isn't known (it may well be in this firmware), and these builds
-// made it rarer, not gone (docs/NOTES.md):
+// stopped with translated code running; these builds made it rarer, not gone. The cause was in the code sync
+// (src/t386_i386.c, t386_jit_sync: one write-back pass), fixed; the builds stay as options:
 //   DEFS=-DT386_JIT_HOLD=1 tools/build.sh   around those operations: up to ~10% slower
 //   DEFS=-DT386_JIT_HOLD=2 tools/build.sh   the whole screen refresh too: up to ~25% slower
 #ifndef T386_JIT_HOLD

@@ -16,15 +16,29 @@ uint32_t t386_sync_calls, t386_sync_cycles;   // (serial "S")
 // again.) Under esp_cache_msync's own lock: core 0's cache operations use the same controller. The stores are done
 // first (fence: none left in the store buffer when the cache controller writes the lines back), and the core's own
 // fetch forgets what it fetched before (fence.i).
-#include "hal/cache_ll.h"
+// Each operation is done twice, as ESP-IDF's own version of the ROM's write-back routine does
+// (esp_rom_cache_writeback_esp32p4*.c); this build links the ROM's. With one pass, the instruction fetch now and then
+// ran a block as first emitted, before its jumps were patched: a branch to its own stub still pointing at itself
+// was caught with a debugger, while memory held it patched.
+#include "soc/cache_reg.h"
+#include "esp32p4/rom/cache.h"
 #include "esp_private/esp_cache_private.h"
+static void t386_cache_op(uint32_t map, uint32_t op, uintptr_t a, uint32_t n) {
+  REG_WRITE(CACHE_SYNC_MAP_REG, map);
+  REG_WRITE(CACHE_SYNC_ADDR_REG, a);
+  REG_WRITE(CACHE_SYNC_SIZE_REG, n);
+  for (int i = 0; i < 2; i++) {
+    REG_WRITE(CACHE_SYNC_CTRL_REG, op);
+    while (!REG_GET_BIT(CACHE_SYNC_CTRL_REG, CACHE_SYNC_DONE)) {}
+  }
+}
 static void t386_jit_sync(void* p, size_t n) {
   const uint32_t c0 = esp_cpu_get_cycle_count();
   uintptr_t a = (uintptr_t)p & ~(uintptr_t)127, e = ((uintptr_t)p + n + 127) & ~(uintptr_t)127;
   asm volatile("fence rw, rw" ::: "memory");
   esp_cache_sync_ops_enter_critical_section();
-  cache_ll_l1_writeback_dcache_addr(CACHE_LL_ID_ALL, a, e - a);
-  cache_ll_l1_invalidate_icache_addr(CACHE_LL_ID_ALL, a, e - a);
+  t386_cache_op(CACHE_MAP_L1_DCACHE, CACHE_WRITEBACK_ENA, a, e - a);
+  t386_cache_op(CACHE_MAP_L1_ICACHE_MASK, CACHE_INVALIDATE_ENA, a, e - a);
   esp_cache_sync_ops_exit_critical_section();
   asm volatile("fence.i" ::: "memory");
   t386_sync_cycles += esp_cpu_get_cycle_count() - c0;
