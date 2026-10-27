@@ -30,8 +30,9 @@ To build the firmware:
 ## Ready-made firmware
 
 Each [release](https://github.com/yejun/tab5-pc/releases) has the firmware as one image to write at address 0
-(`tab5-pc-<version>-prev3.bin` for ESP32-P4 chips of revision v1.x, `-postv3.bin` for v3.x), with its licenses and
-notices and the corresponding source. It is also in M5Burner. To write it yourself:
+(`tab5-pc-<version>-prev3.bin`, for the Tab5's ESP32-P4, revision v1.x), with its licenses and notices and the
+corresponding source. Releases have no image for ESP32-P4 v3.x while no Tab5 with that chip is out (see below to build
+one). It is also in M5Burner. To write it yourself:
 `esptool --chip esp32p4 write-flash 0x0 tab5-pc-1.1.0-prev3.bin`.
 
 ## Build and flash

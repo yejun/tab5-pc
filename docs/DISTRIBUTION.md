@@ -27,7 +27,8 @@ GitHub release page together with:
 Still open:
 
 - **`vgafont.c`**: tiny386's VGA text font has no notice of its own; it is distributed as part of tiny386.
-- **Chip revisions**: the `postv3` image (ESP32-P4 v3.x) is built the same way but has not been tested on a device.
+- **Chip revisions**: releases carry the `prev3` image only (the Tab5's ESP32-P4, v1.x). `CHIP=postv3` builds for
+  v3.x, which no Tab5 has yet; such a build has not been tested on a device.
 - **The ESP32-C6's firmware** (the Tab5's Wi-Fi chip) is not part of this firmware and is not changed by it.
 
 ## SD card images (`tools/make_sdcard.py`)
