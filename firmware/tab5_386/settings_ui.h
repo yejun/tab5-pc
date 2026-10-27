@@ -252,7 +252,7 @@ static void ui_refresh_status() {
     const char* msg = g_fd_state != FD_IDLE ? g_fd_msg
                       : g_fd_iso[0] ? iso_msg
                       : up ? "No PC disks on the card yet. FreeDOS 1.4 is downloaded (18 MB), then its own installer "
-                             "runs: answer its questions, and it sets up drive C: (about 25 minutes)."
+                             "runs: answer its questions, and it sets up drive C: (about 15 minutes)."
                            : "No PC disks on the card yet. Connect to Wi-Fi (on the right), then install FreeDOS.";
     if (strcmp(lv_label_get_text(ui_fd_msg), msg)) lv_label_set_text(ui_fd_msg, msg);
     lv_obj_set_style_text_color(ui_fd_msg, lv_color_hex(g_fd_state == FD_FAILED ? C_WARN : C_INK), 0);

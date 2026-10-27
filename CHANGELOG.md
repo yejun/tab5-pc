@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 (2026-10-26)
+
+The PC's network, a faster translator (Linux too), VBE graphics modes, a DOS-era settings panel and web page, and
+fixes. Firmware images with their notices and corresponding source, as for 1.0.0.
 
 - The PC's network card (NE2000, port 300h, IRQ 9) is connected while Wi-Fi is on: a network of its own inside the
   Tab5 (192.168.77.0/24, the Tab5 at .1 with a DHCP server), routed to the Wi-Fi network with address translation;

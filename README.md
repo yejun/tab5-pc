@@ -32,7 +32,7 @@ To build the firmware:
 Each [release](https://github.com/yejun/tab5-pc/releases) has the firmware as one image to write at address 0
 (`tab5-pc-<version>-prev3.bin` for ESP32-P4 chips of revision v1.x, `-postv3.bin` for v3.x), with its licenses and
 notices and the corresponding source. It is also in M5Burner. To write it yourself:
-`esptool --chip esp32p4 write-flash 0x0 tab5-pc-1.0.0-prev3.bin`.
+`esptool --chip esp32p4 write-flash 0x0 tab5-pc-1.1.0-prev3.bin`.
 
 ## Build and flash
 
@@ -111,7 +111,7 @@ speaker.
 ## Copying files over Wi-Fi
 
 Wi-Fi is off while the PC runs. Open the settings panel (swipe down from the top edge, Sym + Esc, or Scroll Lock)
-and switch on **Copy files: Wi-Fi**. The Tab5 joins your network and shows its address, e.g. `http://192.168.1.50/`.
+and switch on **Copy files over Wi-Fi**. The Tab5 joins your network and shows its address, e.g. `http://192.168.1.50/`.
 Open it in a browser:
 
 ![The web page](docs/images/web.png)

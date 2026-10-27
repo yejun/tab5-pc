@@ -59,7 +59,8 @@ pinned in `vendor/bios.lock`: SeaBIOS rel-1.17.0-20-g81ec9ec0 (coreboot/seabios 
   license) and other parts listed in its README; of its fonts the firmware uses the default one (Adafruit GFX's,
   BSD) and Font4 (Bodmer's TFT_eSPI, FreeBSD license);
 - [LVGL](https://github.com/lvgl/lvgl) 9.6.0 (MIT, (c) 2025 LVGL Kft), with its built-in Montserrat fonts (SIL Open
-  Font License 1.1) and symbol font (from Font Awesome Free).
+  Font License 1.1), symbol font (from Font Awesome Free) and UNSCII 8 (by Viznut, public domain), from which
+  `tools/fonts/px_fonts.py` makes the settings panel's pixel fonts (`src/px_fonts.c`).
 
 ## Downloaded at run time
 
