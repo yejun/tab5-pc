@@ -5,6 +5,10 @@
 // the translator to RISC-V (t386_jit.h): its code cache in PSRAM, which this chip revision can execute
 #define T386_JIT
 #define T386_JIT_CACHE_SIZE (3 << 20)
+// the fast path's pre-decoded blocks (t386_fast_pd.h): only while the translator is off, in its code cache (PSRAM
+// has little room left: WiFi's packets, uploads)
+#define T386_PD_ARENA 0
+#define T386_PD_ALLOC(n) heap_caps_calloc(1, (n), MALLOC_CAP_SPIRAM)
 #include "esp_heap_caps.h"
 #include "esp_cache.h"
 #include "esp_cpu.h"

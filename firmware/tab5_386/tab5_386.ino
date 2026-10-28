@@ -15,7 +15,7 @@
 //                  \b Backspace, \t Tab) | key <hid> [<hid>...] (tap keys by USB HID code, hex, held together;
 //                  e0/e1/e2 = Ctrl/Shift/Alt)
 //                  | fps <n> (screen refresh rate, 0 = paused) | mem | vol <0-255> | mouse <gain> | wifi on|off | wifi <ssid> <password> | ip | net | raw 0|1 | steps <n> | vgafast 0|1 | peek <addr> [<len>] | panel
-//                  | reset (the PC's reset button) | poweroff
+//                  | pd [0|1] (the fast path's pre-decoded blocks; off / on) | reset (the PC's reset button) | poweroff
 #include <M5Unified.h>
 #include <SD_MMC.h>
 #include <lgfx/v1/platforms/esp32p4/Panel_DSI.hpp>
@@ -48,6 +48,9 @@ void t386_jit_ops_report(char* buf, int len);
 void t386_fast_ops_report(char* buf, int len);
 void t386_ram_written(uint32_t addr, int len);
 void t386_cpu_report(CPUI386* cpu, char* buf, int len);
+extern void (*t386_shutdown)(void);
+extern bool t386_pd_enabled;   // the fast path's pre-decoded blocks (t386_fast_pd.h)
+void t386_pd_report(char* buf, int len);
 void t386_cpu_regs(CPUI386* cpu, char* buf, int len);
 void t386_pic_report(PicState2* s, char* buf, int len);
 void t386_port_report(char* buf, int len);
@@ -620,6 +623,13 @@ static void handle_serial() {
       extern int t386_jit_xlink;
       t386_jit_xlink = line.substring(10).toInt();
       Serial.printf("xlink %d\n", t386_jit_xlink);
+    } else if (line == "pd") {   // the fast path's pre-decoded blocks (t386_fast_pd.h)
+      static char buf[1200];
+      t386_pd_report(buf, sizeof(buf));
+      Serial.print(buf);
+    } else if (line == "pd 0" || line == "pd 1") {   // pre-decoding off or on
+      t386_pd_enabled = line == "pd 1";
+      Serial.printf("pd %s\n", t386_pd_enabled ? "on" : "off");
     } else if (line == "jit 0" || line == "jit 1") {   // the translator on or off (t386_jit.h)
       extern bool t386_jit_enabled;
       t386_jit_enabled = line == "jit 1";
@@ -942,6 +952,7 @@ void setup() {
   fb_sync();
   g_input = xQueueCreate(64, sizeof(InputEvent));
   g_pc = pc_new(redraw, nullptr, (u8*)g_emu_fb, &g_conf);
+  t386_shutdown = [] { g_pc->reset_request = 1; };   // (a triple fault: the PC resets, as a board does)
   t386_lfb_hooks();
   guest_net_mac();
   guest_net_start();   // (the PC's network, Wi-Fi on or off)

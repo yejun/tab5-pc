@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- The fast interpreter (used with the translator off, and by the translator for what it leaves) is about 1.5 times
+  as fast: its handlers in 16-bit, 32-bit and generic copies, cheaper memory and window checks, and pre-decoded
+  blocks (`t386_fast_pd.h`; serial `pd`, `pd 0|1`), kept in the translator's code cache while it is off. A game's
+  built-in benchmark with the translator off takes about 35% less time.
+- A program that goes wild no longer takes the Tab5 down: an interrupt or exception that can't be delivered becomes
+  a double fault, and if that fails too, a PC reset (a triple fault, as a board does); tiny386 aborted there.
+- AAM with an immediate of 0 raises a divide error (`vendor/patches/0016`); it divided by 0.
+- Fast interpreter fixes: MOVS from video memory with a null ES raised no #GP; a real-mode INT whose stack overlapped
+  the vector table read the vector after pushing; exceptions in its handlers left the instructions before them out of
+  the instruction count; pre-decoded blocks at addresses 0-2 missed stores into them, and code going to another page
+  at every block (a loop over a page boundary with paging) didn't return to service devices.
+
 ## 1.1.0 (2026-10-26)
 
 The PC's network, a faster translator (Linux too), VBE graphics modes, a DOS-era settings panel and web page, and

@@ -5466,6 +5466,21 @@ static bool jit_exec(CPUI386 *cpu, int stepcount)
 
 static bool jit_exec_in(CPUI386 *cpu, int stepcount)
 {
+#ifdef T386_FAST_PD
+	// While the translator is off, its code cache holds the fast path's pre-decoded blocks (t386_fast_pd.h); it's
+	// emptied when the translator is on again. (Both here: core 1, between steps.)
+	static bool lent;
+	if (jit_ready && lent == t386_jit_enabled) {
+		if (lent) {
+			pd_lend(NULL, 0);
+			jit_flush();
+		} else {   // (emptied first: its invalidations would write into its blocks there, now the fast path's)
+			jit_flush();
+			pd_lend((u8 *) jit_cache_base, (u8 *) jit_cache_end - (u8 *) jit_cache_base);
+		}
+		lent = !lent;
+	}
+#endif
 	if (!t386_jit_enabled || (!jit_ready && !jit_init(cpu))) return fast_exec(cpu, stepcount);
 	int budget = stepcount;
 	ftlb_check(cpu);

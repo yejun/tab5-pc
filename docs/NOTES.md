@@ -26,7 +26,12 @@ instruction. Two layers sit in front of it:
 1. **A fast interpreter** (`t386_fast.h`) decodes the common instructions inline, turns memory operands into host
    pointers through a small TLB of its own, reads instruction bytes through a host pointer, and dispatches the next
    instruction from every handler. It works on tiny386's CPU state as it is, lazy flags included, so the two can take
-   turns at any instruction boundary: anything unusual goes to tiny386 for that one instruction.
+   turns at any instruction boundary: anything unusual goes to tiny386 for that one instruction. Its handlers are
+   compiled three times: for 32-bit and for 16-bit code with the operand and address sizes fixed (less code in the
+   instruction cache, no size checks), and a generic copy for instructions with a 66 or 67 prefix. With the
+   translator off, straight runs of instructions are also decoded once into **pre-decoded blocks** (`t386_fast_pd.h`)
+   of small operations that run one after another, linked block to block; a block keeps a copy of its code and is
+   compared again when something may have written it.
 2. **A translator** (`t386_jit.h`) turns code that runs often into RISC-V code (real mode, virtual-8086 mode and
    protected mode, with or without paging), kept in a code cache in PSRAM. x86 registers live in RISC-V registers, flags stay lazy, a compare and a
    conditional jump become one branch, and blocks jump to each other directly.
