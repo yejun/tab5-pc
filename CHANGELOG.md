@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.2.1 (2026-10-28)
+
+The empty card's settings panel with the Machine frame alone, and README updates. The firmware image with its
+notices and corresponding source, as for 1.2.0.
 
 - The settings panel on an empty card: no FreeDOS frame in place of the sliders any more; the Machine frame's
   **Install DOS** and **Install Linux** set up the first machine, as any other (its list reads "(none yet)"). The
