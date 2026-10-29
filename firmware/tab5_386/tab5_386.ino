@@ -177,6 +177,7 @@ static void t386_msync(void* p, size_t n, int flags) {
 #include "disk_access.h"
 #include "web.h"
 #include "fd_install.h"
+#include "linux_install.h"
 
 static const char* pc_state() {
   return g_pc_stopped ? "stopped" : g_disk.drive >= 0 ? "paused: disk open" : g_user_pause ? "paused" : "running";
@@ -712,6 +713,22 @@ static void handle_serial() {
       const int ok = WiFi.hostByName(line.substring(4).c_str(), ip);
       Serial.printf("dns: %s -> %s (%s, %lld ms; DNS server %s)\n", line.substring(4).c_str(), ip.toString().c_str(),
                     ok == 1 ? "ok" : "failed", (long long)((esp_timer_get_time() - t0) / 1000), WiFi.dnsIP().toString().c_str());
+    } else if (line == "machines") {   // the card's machines (linux_install.h); * the one running
+      machines_scan();
+      for (int i = 0; i < g_machine_count; ++i)
+        Serial.printf("%c %s  (%s)\n", machine_path() == "/sdcard/" + String(g_machines[i].file) ? '*' : ' ',
+                      g_machines[i].file, g_machines[i].name);
+    } else if (line.startsWith("machine ")) {   // machine <file>: start that one (the Tab5 restarts)
+      machine_choose(line.c_str() + 8);
+      restart_tab5();
+    } else if (line.startsWith("install linux ") || line.startsWith("install dos ")) {   // install linux|dos <name>:
+      const bool dos = line.startsWith("install dos ");                                 // as the panel's buttons
+      const String name = line.substring(dos ? 12 : 14);
+      if (!machine_name_ok(name.c_str())) Serial.println("install: a name of letters, digits, - and _");
+      else if (machine_name_used(name.c_str()) && (dos || !lx_installed(name.c_str()))) Serial.println("install: that name is in use");
+      else install_request(dos ? 'd' : 'l', name.c_str());   // (the Tab5 restarts into the install)
+    } else if (line == "linux") {
+      Serial.printf("linux: %s (%d%%)\n", g_lx_msg, (int)g_lx_pct);
     } else if (line == "install freedos") {   // the settings panel's "Install FreeDOS" (fd_install.h), on an empty card
       if (!g_setup_needed) Serial.println("install: only on a card without tiny386.ini or disk images");
       else if (g_wifi != WIFI_UP) Serial.println("install: Wi-Fi isn't up");
@@ -862,6 +879,64 @@ static int ne2000_ini_handler(void*, const char* section, const char* name, cons
   return 1;
 }
 
+// An install asked for in the settings panel (Install DOS / Install Linux, linux_install.h): the Tab5 restarted for it
+// and does it instead of starting a PC, with all the memory free and nothing else using the card or Wi-Fi, then
+// restarts into the new machine (DOS: FreeDOS's installer; Linux: its first start). If it fails it says why and, after
+// a tap on the screen or a minute, restarts into the machine there was. Wi-Fi: the saved network, joined here
+// directly (no web server, no PC network: they want a PC).
+static void install_mode_run() {
+  const String req = g_prefs.getString("install", "");
+  if (req.length() < 3 || req[1] != ':') return;
+  g_prefs.remove("install");   // (once: a crash doesn't start it again)
+  const char kind = req[0];
+  const String name = req.substring(2);
+  const String title = String(kind == 'd' ? "Installing DOS" : "Installing Linux") + " as " + name;
+  g_held = true;   // (no PC to hold: pc_hold returns at once)
+  String failed;
+  show_status(title.c_str(), "Connecting to Wi-Fi ...");
+  wifi_load();
+  if (g_ssid.isEmpty()) {
+    failed = "No Wi-Fi network is set up";
+  } else {
+    heap_caps_malloc_extmem_enable(512);   // (as wifi_enable: lwIP's packets in PSRAM)
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(g_ssid.c_str(), g_pass.c_str());
+    for (int i = 0; i < 300 && WiFi.status() != WL_CONNECTED; ++i) delay(100);
+    if (WiFi.status() != WL_CONNECTED) failed = "Could not connect to " + g_ssid;
+  }
+  if (failed.isEmpty()) {
+    WiFi.setSleep(false);   // (modem power save: ~50 KB/s)
+    g_wifi = WIFI_UP;
+    Serial.printf("install: %s, Wi-Fi up (DMA-capable internal RAM %u free, PSRAM %u)\n", req.c_str(),
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL),
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    if (kind == 'd') fd_install_start(false, name.c_str());
+    else lx_install_start(name.c_str());
+    String shown;
+    for (;;) {
+      const FdState st = kind == 'd' ? g_fd_state : g_lx_state;
+      const char* msg = kind == 'd' ? g_fd_msg : g_lx_msg;
+      if (shown != msg) show_status(title.c_str(), (shown = msg).c_str());
+      if (st != FD_RUNNING) break;
+      delay(250);
+    }
+    if ((kind == 'd' ? g_fd_state : g_lx_state) == FD_IDLE) {   // done: the new machine from now on (DOS: its installer)
+      machine_choose(("tiny386-" + name + ".ini").c_str());
+      show_status(title.c_str(), "Done. Restarting into it ...");
+      delay(1500);
+      tab5_restart();
+    }
+    failed = kind == 'd' ? g_fd_msg : g_lx_msg;   // (FD_FAILED)
+  }
+  show_status(("The install failed: " + failed).c_str(), "Tap the screen to go back (or wait a minute)");
+  for (int i = 0; i < 600; ++i) {
+    M5.update();
+    if (M5.Touch.getCount()) break;
+    delay(100);
+  }
+  tab5_restart();
+}
+
 static void load_config(PCConfig& conf, bool have_sd) {
   memset(&conf, 0, sizeof(conf));
   conf.mem_size = 16 * 1024 * 1024;
@@ -869,11 +944,13 @@ static void load_config(PCConfig& conf, bool have_sd) {
   conf.cpu_gen = 4;
   conf.fpu = 0;
   conf.fill_cmos = 1;
-  // an installer running (fd_install.h), and now a system on C.IMG: the install is over
+  const String ini = machine_path();   // (/sdcard/tiny386.ini, or the machine chosen in the panel: linux_install.h)
+  // an installer running in it (fd_install.h), and now a system on its C.IMG: the install is over
+  fd_use(ini);
   if (have_sd && ini_parse(FD_INI, fd_ini_handler, &g_install_mode) == 0 && g_install_mode) fd_install_finish();
-  if (have_sd && ini_parse("/sdcard/tiny386.ini", parse_conf_ini, &conf) == 0) {
-    Serial.println("config: /sdcard/tiny386.ini");
-    ini_parse("/sdcard/tiny386.ini", ne2000_ini_handler, nullptr);
+  if (have_sd && ini_parse(ini.c_str(), parse_conf_ini, &conf) == 0) {
+    Serial.printf("config: %s\n", ini.c_str());
+    ini_parse(ini.c_str(), ne2000_ini_handler, nullptr);
     if (t386_ne2000_irq != 9) Serial.printf("config: the network card on IRQ %d\n", t386_ne2000_irq);
   } else if (have_sd) {
     if (file_exists("/sdcard/hda.img")) conf.disks[0] = "/sdcard/hda.img";
@@ -937,10 +1014,12 @@ void setup() {
   ui_setup();
   g_mouse_gain = g_prefs.getFloat("mouse", 1.0f);
   g_aspect43 = g_prefs.getBool("aspect43", true);
+  g_machine = g_prefs.getString("machine", "");   // (linux_install.h)
   show_status("Tab5 PC", "Starting...");
   const bool have_sd = sd_mount();
   if (have_sd) Serial.printf("SD card: %llu MB\n", SD_MMC.cardSize() >> 20);
   else Serial.println("SD card: none");
+  if (have_sd) install_mode_run();   // (an install asked for: done instead of a PC; the Tab5 restarts after)
   load_config(g_conf, have_sd);
   if (!have_sd) {
     show_status("No SD card", "Starting the PC without disks");

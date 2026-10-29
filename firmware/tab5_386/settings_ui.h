@@ -27,6 +27,13 @@ static lv_obj_t *ui_modal, *ui_modal_title, *ui_ta_ssid, *ui_ta_pass, *ui_show_b
 static lv_obj_t *ui_connect_btn, *ui_bri, *ui_vol, *ui_mouse, *ui_wifi_sw, *ui_batt, *ui_aspect_sw;
 static lv_obj_t *ui_dc, *ui_fd, *ui_fd_msg, *ui_fd_bar, *ui_fd_btn, *ui_fd_iso, *ui_dc_cap, *ui_fd_cap;   // the sliders; or, the card empty, installing
                                                                     // FreeDOS (fd_install.h) in their place
+static lv_obj_t *ui_mach_dd, *ui_mach_start, *ui_inst_msg, *ui_dos_btn, *ui_lnx_btn;   // the machines
+static int64_t g_start_armed = 0;   // "Start" tapped once at this time (as Reset PC: it restarts the Tab5)
+// The dialog: a Wi-Fi network's name and password, or a new machine's name (Install DOS / Install Linux)
+enum ModalMode { MODAL_WIFI, MODAL_DOS, MODAL_LINUX };
+static ModalMode g_modal_mode = MODAL_WIFI;
+static lv_obj_t* ui_pass_row;
+static String g_update_ok;   // the name Install was tapped for once (it warns that the PC stops): again installs
 static bool g_scanning = false, g_connect_pending = false, g_touch_block = false;
 static int64_t g_reset_armed = 0;   // "Reset PC" tapped once at this time: a second tap within RESET_CONFIRM_MS resets
 // The Wi-Fi switch tapped: on (1) or off (0), done once the panel has shown it (ui_poll): switching on the first time
@@ -207,6 +214,23 @@ static void ui_switch_label(lv_obj_t* label, lv_obj_t* sw) {
   }, LV_EVENT_CLICKED, sw);
 }
 
+// ---- machines -----------------------------------------------------------------------------------------------
+
+// The card's machines into the list (linux_install.h), the one running chosen
+static void ui_fill_machines() {
+  machines_scan();
+  String opts;
+  int cur = 0;
+  for (int i = 0; i < g_machine_count; ++i) {
+    if (i) opts += "\n";
+    opts += g_machines[i].name;
+    if (machine_path() == "/sdcard/" + String(g_machines[i].file)) cur = i;
+  }
+  lv_dropdown_set_options(ui_mach_dd, g_machine_count ? opts.c_str() : "(no settings file on the card)");
+  lv_dropdown_set_selected(ui_mach_dd, cur);
+  g_start_armed = 0;
+}
+
 // ---- status -------------------------------------------------------------------------------------------------
 
 static void ui_refresh_status() {
@@ -240,6 +264,25 @@ static void ui_refresh_status() {
   if (strcmp(lv_label_get_text(ui_batt), batt)) lv_label_set_text(ui_batt, batt);
   const bool low = g_batt.presence.state == BatteryPresence::Present && g_batt.level <= 15 && !g_batt.external;
   lv_obj_set_style_text_color(ui_batt, lv_color_hex(low ? 0x8a1208 : C_BLACK), 0);   // (on the title bar)
+  {   // the machines: Start (two taps), unless the one chosen is running
+    const int sel = lv_dropdown_get_selected(ui_mach_dd);
+    const bool running_it = sel < g_machine_count && machine_path() == "/sdcard/" + String(g_machines[sel].file);
+    const bool sarmed = g_start_armed && esp_timer_get_time() / 1000 - g_start_armed < RESET_CONFIRM_MS;
+    if (!sarmed) g_start_armed = 0;
+    lv_label_set_text(lv_obj_get_child(ui_mach_start, 0), running_it ? "Running" : sarmed ? "Confirm" : LV_SYMBOL_PLAY "  Start");
+    if (running_it || !g_machine_count) lv_obj_add_state(ui_mach_start, LV_STATE_DISABLED);
+    else lv_obj_remove_state(ui_mach_start, LV_STATE_DISABLED);
+    // a new machine: DOS (fd_install.h) or Linux (linux_install.h), installed after a restart with no PC
+    const bool net = !g_ssid.isEmpty();
+    const char* msg = net ? "A new machine: DOS (FreeDOS 1.4, an 18 MB download, then its own installer) or Linux "
+                            "(Sprig Linux, 10 MB, 140 MB on the card). The Tab5 restarts to install it."
+                          : "A new machine, DOS or Linux: set up Wi-Fi first (a network on the right).";
+    if (strcmp(lv_label_get_text(ui_inst_msg), msg)) lv_label_set_text(ui_inst_msg, msg);
+    for (lv_obj_t* b : {ui_dos_btn, ui_lnx_btn}) {
+      if (net) lv_obj_remove_state(b, LV_STATE_DISABLED);
+      else lv_obj_add_state(b, LV_STATE_DISABLED);
+    }
+  }
   if (g_setup_needed) {   // (known after the panel is made: load_config)
     lv_obj_add_flag(ui_dc, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(ui_dc_cap, LV_OBJ_FLAG_HIDDEN);
@@ -374,7 +417,9 @@ static void ui_hide_modal() {
   lv_obj_add_flag(ui_modal, LV_OBJ_FLAG_HIDDEN);
 }
 
+static void ui_name_submit();
 static void ui_connect() {
+  if (g_modal_mode != MODAL_WIFI) { ui_name_submit(); return; }
   const char* ssid = lv_textarea_get_text(ui_ta_ssid);
   if (!ssid[0]) { lv_label_set_text(ui_msg, "Enter the network name"); return; }
   g_pending_ssid = ssid;
@@ -388,6 +433,10 @@ static void ui_connect() {
 
 static void ui_show_modal(const char* ssid, bool secure) {
   const bool other = ssid == nullptr;
+  g_modal_mode = MODAL_WIFI;
+  lv_textarea_set_placeholder_text(ui_ta_ssid, "Network name");
+  lv_obj_remove_flag(ui_pass_row, LV_OBJ_FLAG_HIDDEN);
+  lv_label_set_text(lv_obj_get_child(ui_connect_btn, 0), "Connect");
   lv_textarea_set_text(ui_ta_ssid, other ? "" : ssid);
   lv_textarea_set_text(ui_ta_pass, "");
   lv_textarea_set_password_mode(ui_ta_pass, true);
@@ -405,6 +454,46 @@ static void ui_show_modal(const char* ssid, bool secure) {
   lv_keyboard_set_textarea(ui_kb, target);
   lv_obj_add_state(target, LV_STATE_FOCUSED);
   lv_obj_remove_state(other ? ui_ta_pass : ui_ta_ssid, LV_STATE_FOCUSED);
+}
+
+// The dialog asking for a new machine's name (Install DOS / Install Linux)
+static void ui_show_name_modal(ModalMode mode) {
+  g_modal_mode = mode;
+  g_update_ok = "";
+  lv_label_set_text(ui_modal_title, mode == MODAL_DOS ? "Install DOS: the machine's name" : "Install Linux: the machine's name");
+  lv_textarea_set_placeholder_text(ui_ta_ssid, "e.g. dos, games, linux");
+  lv_textarea_set_text(ui_ta_ssid, "");
+  lv_obj_remove_flag(ui_ta_ssid, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(ui_pass_row, LV_OBJ_FLAG_HIDDEN);
+  lv_label_set_text(ui_msg, "Letters, digits, - and _: tiny386-<name>.ini, files in /<name>");
+  lv_obj_set_style_text_color(ui_msg, lv_color_hex(C_DIM), 0);
+  lv_obj_add_flag(ui_spinner, LV_OBJ_FLAG_HIDDEN);
+  lv_label_set_text(lv_obj_get_child(ui_connect_btn, 0), "Install");
+  lv_obj_remove_state(ui_connect_btn, LV_STATE_DISABLED);
+  lv_obj_remove_flag(ui_modal, LV_OBJ_FLAG_HIDDEN);
+  lv_keyboard_set_textarea(ui_kb, ui_ta_ssid);
+  lv_obj_add_state(ui_ta_ssid, LV_STATE_FOCUSED);
+  lv_obj_remove_state(ui_ta_pass, LV_STATE_FOCUSED);
+}
+
+static void ui_name_submit() {
+  const String name = lv_textarea_get_text(ui_ta_ssid);
+  auto warn = [](const char* m) {
+    lv_label_set_text(ui_msg, m);
+    lv_obj_set_style_text_color(ui_msg, lv_color_hex(C_WARN), 0);
+  };
+  if (!machine_name_ok(name.c_str())) { warn("A name of letters, digits, - and _ (not \"default\")"); return; }
+  if (g_ssid.isEmpty()) { warn("Set up Wi-Fi first (a network on the right)"); return; }
+  const bool update = g_modal_mode == MODAL_LINUX && lx_installed(name.c_str());
+  if (machine_name_used(name.c_str()) && !update) { warn("That name is in use (its .ini or folder is on the card)"); return; }
+  if (!name.equalsIgnoreCase(g_update_ok)) {   // asked once: the PC stops (installs run with no PC: install_mode_run)
+    g_update_ok = name;
+    warn(update ? "It holds Sprig Linux: its kernel is updated, its files kept. The PC stops and the Tab5 restarts: again"
+                : "The PC stops (anything unsaved is lost) and the Tab5 restarts to install: tap again");
+    lv_label_set_text(lv_obj_get_child(ui_connect_btn, 0), "Restart");
+    return;
+  }
+  install_request(g_modal_mode == MODAL_DOS ? 'd' : 'l', name.c_str());
 }
 
 static void ui_connect_poll() {
@@ -487,7 +576,7 @@ static void ui_build_modal(lv_obj_t* scr) {
   lv_obj_set_style_shadow_opa(box, LV_OPA_60, 0);
   ui_modal_title = ui_label(box, "", &px_font_32, C_ACCENT);
   ui_ta_ssid = ui_textarea(box, "Network name");
-  lv_obj_t* row = lv_obj_create(box);       // password field + Show
+  lv_obj_t* row = ui_pass_row = lv_obj_create(box);   // password field + Show
   lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
   lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(row, 0, 0);
@@ -581,7 +670,7 @@ static void kbd_type_in_panel(KbdKey k) {
   else if (k.code == 0x4F) { if (ta) lv_textarea_cursor_right(ta); }
   else if (k.code == 0x4A) { if (ta) lv_textarea_set_cursor_pos(ta, 0); }
   else if (k.code == 0x4D) { if (ta) lv_textarea_set_cursor_pos(ta, LV_TEXTAREA_CURSOR_LAST); }
-  else if (c == '\t') {   // to the other field, if it is shown
+  else if (c == '\t' && g_modal_mode == MODAL_WIFI) {   // to the other field, if it is shown
     lv_obj_t* other = ta == ui_ta_ssid ? ui_ta_pass : ui_ta_ssid;
     if (!lv_obj_has_flag(other, LV_OBJ_FLAG_HIDDEN)) {
       lv_keyboard_set_textarea(ui_kb, other);
@@ -621,6 +710,7 @@ static void panel_open() {
   if (g_aspect43) lv_obj_add_state(ui_aspect_sw, LV_STATE_CHECKED);
   else lv_obj_remove_state(ui_aspect_sw, LV_STATE_CHECKED);
   g_reset_armed = 0;
+  ui_fill_machines();
   ui_refresh_status();
   ui_fill_list();
   lv_obj_invalidate(lv_screen_active());
@@ -790,8 +880,7 @@ static void ui_setup() {
     lv_obj_set_style_bg_color(ui_fd_bar, lv_color_hex(C_DEEP), 0);
     lv_obj_set_style_bg_color(ui_fd_bar, lv_color_hex(C_ACCENT), LV_PART_INDICATOR);
     ui_fd_btn = ui_button(ui_fd, LV_SYMBOL_DOWNLOAD "  Install FreeDOS 1.4", [](lv_event_t*) {
-      fd_install_start(false);
-      ui_refresh_status();
+      ui_show_name_modal(MODAL_DOS);   // (a named machine, as from the Machine frame)
     }, true);
     lv_obj_set_size(ui_fd_btn, LW - 50, 48);
     lv_obj_set_pos(ui_fd_btn, 0, 130);
@@ -815,7 +904,8 @@ static void ui_setup() {
   lv_obj_set_style_text_font(lv_obj_get_child(done, 0), &px_font_32, 0);
 
   // networks
-  lv_obj_t* nc = ui_card(scr, RX, TOP, RW, DY + 222 - TOP);
+  constexpr int NH = 272;   // (as tall as the PC's frame: the machines below, as tall as the sliders')
+  lv_obj_t* nc = ui_card(scr, RX, TOP, RW, NH);
   ui_scan_lbl = ui_label(nc, "", &px_font_24, C_DIM);
   lv_obj_set_pos(ui_scan_lbl, 0, 4);
   lv_obj_set_width(ui_scan_lbl, RW - 50 - 150 - 16);   // (left of Scan, in two lines if need be)
@@ -825,13 +915,56 @@ static void ui_setup() {
   lv_obj_align(scan, LV_ALIGN_TOP_RIGHT, 0, 0);
   ui_list = lv_list_create(nc);
   lv_obj_set_pos(ui_list, 0, 64);
-  lv_obj_set_size(ui_list, RW - 50, DY + 222 - TOP - 50 - 64);
+  lv_obj_set_size(ui_list, RW - 50, NH - 50 - 64);
   lv_obj_set_style_bg_color(ui_list, lv_color_hex(C_CARD), 0);
   lv_obj_set_style_border_width(ui_list, 0, 0);
   lv_obj_set_style_radius(ui_list, 0, 0);
   lv_obj_set_style_pad_all(ui_list, 0, 0);
   lv_obj_set_style_text_font(ui_list, &px_font_24, 0);
   ui_caption(scr, "Wi-Fi networks", RX, TOP, RW);
+
+  // the machines (the card's settings files) and Sprig Linux (linux_install.h)
+  lv_obj_t* mc = ui_card(scr, RX, DY, RW, 222);
+  ui_mach_dd = lv_dropdown_create(mc);
+  lv_obj_set_pos(ui_mach_dd, 0, 0);
+  lv_obj_set_size(ui_mach_dd, 400, 48);
+  lv_obj_set_style_text_font(ui_mach_dd, &px_font_24, 0);
+  lv_obj_set_style_bg_color(ui_mach_dd, lv_color_hex(C_DEEP), 0);
+  lv_obj_set_style_text_color(ui_mach_dd, lv_color_hex(C_ACCENT), 0);
+  lv_obj_set_style_border_color(ui_mach_dd, lv_color_hex(C_LINE), 0);
+  lv_obj_set_style_radius(ui_mach_dd, 0, 0);
+  lv_obj_t* ddl = lv_dropdown_get_list(ui_mach_dd);
+  lv_obj_set_style_text_font(ddl, &px_font_24, 0);
+  lv_obj_set_style_bg_color(ddl, lv_color_hex(C_DEEP), 0);
+  lv_obj_set_style_text_color(ddl, lv_color_hex(C_INK), 0);
+  lv_obj_set_style_radius(ddl, 0, 0);
+  lv_obj_set_style_bg_color(ddl, lv_color_hex(C_BAR), LV_PART_SELECTED | LV_STATE_CHECKED);
+  lv_obj_set_style_text_color(ddl, lv_color_hex(C_BLACK), LV_PART_SELECTED | LV_STATE_CHECKED);
+  lv_obj_add_event_cb(ui_mach_dd, [](lv_event_t*) { g_start_armed = 0; ui_refresh_status(); }, LV_EVENT_VALUE_CHANGED,
+                      nullptr);
+  ui_mach_start = ui_button(mc, "", [](lv_event_t*) {   // two taps: the Tab5 restarts, the PC's work is lost
+    const int sel = lv_dropdown_get_selected(ui_mach_dd);
+    const int64_t now = esp_timer_get_time() / 1000;
+    if (sel < g_machine_count && g_start_armed && now - g_start_armed < RESET_CONFIRM_MS) {
+      machine_choose(g_machines[sel].file);
+      restart_tab5();
+    }
+    g_start_armed = now;
+    ui_refresh_status();
+  }, false);
+  lv_obj_set_size(ui_mach_start, RW - 50 - 412, 48);
+  lv_obj_set_pos(ui_mach_start, 412, 0);
+  ui_inst_msg = ui_label(mc, "", &lv_font_montserrat_20, C_INK);   // (prose: the smaller face)
+  lv_label_set_long_mode(ui_inst_msg, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(ui_inst_msg, lv_pct(100));
+  lv_obj_set_pos(ui_inst_msg, 0, 58);
+  ui_dos_btn = ui_button(mc, LV_SYMBOL_DOWNLOAD "  Install DOS", [](lv_event_t*) { ui_show_name_modal(MODAL_DOS); }, true);
+  lv_obj_set_size(ui_dos_btn, (RW - 50 - 12) / 2, 46);
+  lv_obj_set_pos(ui_dos_btn, 0, 126);
+  ui_lnx_btn = ui_button(mc, LV_SYMBOL_DOWNLOAD "  Install Linux", [](lv_event_t*) { ui_show_name_modal(MODAL_LINUX); }, true);
+  lv_obj_set_size(ui_lnx_btn, (RW - 50 - 12) / 2, 46);
+  lv_obj_set_pos(ui_lnx_btn, (RW - 50 + 12) / 2, 126);
+  ui_caption(scr, "Machine", RX, DY, RW);
 
   ui_build_modal(scr);
 }

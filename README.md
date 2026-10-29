@@ -53,20 +53,22 @@ v3.x for later ones: `CHIP=postv3 tools/build.sh upload`. A build for the wrong 
 ## First start: FreeDOS on an empty card
 
 1. Put an empty card in the Tab5 and switch it on. With nothing on the card, the settings panel opens with Wi-Fi
-   on: choose your network on the right, then tap **Install FreeDOS 1.4**.
+   on: choose your network on the right, then tap **Install FreeDOS 1.4** and give the machine a name (for example
+   `dos`; tap again to confirm). The Tab5 restarts into its install mode, with no PC running, and shows how it goes.
 
    ![The settings panel on an empty card](docs/images/panel-install.png)
 
-2. The Tab5 downloads FreeDOS 1.4's LiteUSB disk (18 MB, from freedos.org), makes the PC's hard disk (`C.IMG`,
-   512 MB, partitioned and formatted) and restarts into FreeDOS's own installer. Answer its questions: your
+2. The Tab5 downloads FreeDOS 1.4's LiteUSB disk (18 MB, from freedos.org), makes the PC's hard disk
+   (`/dos/C.IMG`, 512 MB, partitioned and formatted) and the machine's settings (`/tiny386-dos.ini`), and restarts
+   into FreeDOS's own installer. Answer its questions: your
    language, **Yes** to proceed, **Yes** to format the drive (the installer calls it D:, as it started from its own
    disk), your keyboard, **Plain DOS system**, and **Yes** to install. (The questions that default to No need Up,
    then Enter.)
 
    ![FreeDOS's installer](docs/images/fd-language.png)
 
-3. Copying the packages takes about 20 minutes. When the installer asks to reboot, say yes: the Tab5 sets the PC
-   up to start from `C.IMG` alone, removes the installer's files from the card, and adjusts `C:\FDAUTO.BAT` for this
+3. Copying the packages takes about 20 minutes. When the installer asks to reboot, say yes: the Tab5 sets the
+   machine up to start from its `C.IMG` alone, removes the installer's files from the card, and adjusts `C:\FDAUTO.BAT` for this
    PC (no CD-ROM drive by default; the Sound Blaster's `BLASTER` setting). FreeDOS then starts at the `C:\>` prompt.
 
    ![Installing](docs/images/fd-progress.png)
@@ -82,6 +84,27 @@ the install is done.
 - **Prepare the card on a computer**: `.venv/bin/python tools/make_sdcard.py` makes `sdcard/C.IMG` (FreeDOS 1.4
   with all its packages, 32 MB), `sdcard/D.IMG` (504 MB, empty) and a matching `sdcard/tiny386.ini`. Copy the three
   files to the root of the card. It starts straight at the `C:\>` prompt.
+
+## More machines: DOS and Linux side by side
+
+The settings panel's **Machine** frame lists the machines on the card: `default` (`/tiny386.ini`) and every one
+named N (`/tiny386-N.ini`, its files in the folder `/N`). Choose one and tap **Start** twice: the Tab5 restarts into
+it, and keeps starting it, through every restart, until you choose another.
+
+**Install DOS** and **Install Linux** make a new machine (a saved Wi-Fi network is needed): give it a name, tap
+again to confirm that the PC stops, and the Tab5 restarts into its install mode, with no PC running, then into the
+new machine.
+
+- **DOS**: FreeDOS 1.4, as above: its installer starts in the new machine.
+- **Linux**: the latest release of [Sprig Linux](https://github.com/yejun/sprig-linux), a small Linux made for this
+  PC (about 10 MB downloaded, 140 MB on the card), every file checked against the release's checksums. It starts
+  with a graphics console (800 x 600); the machine's settings file says how to use the text console instead.
+  Installing Linux again with the same name updates it: its kernel and loader are replaced, its disk (`root.img`,
+  your files) is kept.
+
+A name already on the card (its settings file or its folder) can't be used again, except to update Sprig Linux. If an
+install fails, the screen says why, and a tap goes back to the machine there was. Serial: `machines`,
+`machine <file>`, `install dos <name>`, `install linux <name>`.
 
 ## Using it
 
@@ -168,7 +191,8 @@ height, the default), or square pixels (sharper, wider). The top right shows the
 
 ![The settings panel](docs/images/panel.png)
 
-**`tiny386.ini`** at the root of the card describes the machine; the Tab5 reads it when it starts:
+**`tiny386.ini`** at the root of the card describes the machine (or `tiny386-N.ini`, the machine named N, if it is
+the one chosen in the panel); the Tab5 reads it when it starts:
 
 | key | meaning |
 |---|---|

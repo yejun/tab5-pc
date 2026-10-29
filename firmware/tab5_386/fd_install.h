@@ -18,12 +18,37 @@ void fd_idf_tls_free(void* p) __asm__("esp_mbedtls_mem_free");
 
 static constexpr const char* FD_URL = "https://download.freedos.org/1.4/FD14-LiteUSB.zip";
 static constexpr const char* FD_ENTRY = "FD14LITE.img";   // the LiteUSB disk in the zip
-static constexpr const char* FD_SETUP = "/sdcard/FDSETUP.IMG";
-static constexpr const char* FD_DISK = "/sdcard/C.IMG";
-static constexpr const char* FD_NOCD = "/sdcard/NOCD.ISO";
-static constexpr const char* FD_INI = "/sdcard/tiny386.ini";
+// Where an install goes (fd_use): for the default machine the card's root and /sdcard/tiny386.ini; for one named N,
+// /sdcard/N and /sdcard/tiny386-N.ini (the settings panel's machines: linux_install.h)
+static String g_fd_dir = "/sdcard", g_fd_ini = "/sdcard/tiny386.ini", g_fd_setup, g_fd_disk, g_fd_nocd;
+static String g_fd_machine;   // the machine's file to start after the install's restart ("": tiny386.ini)
+#define FD_SETUP g_fd_setup.c_str()
+#define FD_DISK g_fd_disk.c_str()
+#define FD_NOCD g_fd_nocd.c_str()
+#define FD_INI g_fd_ini.c_str()
+static void fd_use(const String& ini) {   // the machine whose settings are in ini (a path on the card)
+  g_fd_ini = ini;
+  const String file = ini.substring(ini.lastIndexOf('/') + 1);
+  const bool named = file.startsWith("tiny386-") && file.endsWith(".ini") && file.length() > 12;
+  g_fd_dir = named ? "/sdcard/" + file.substring(8, file.length() - 4) : String("/sdcard");
+  g_fd_machine = named ? file : String("");
+  g_fd_setup = g_fd_dir + "/FDSETUP.IMG";
+  g_fd_disk = g_fd_dir + "/C.IMG";
+  g_fd_nocd = g_fd_dir + "/NOCD.ISO";
+}
+// a settings text with @/ for the install's directory
+static String fd_ini_text(const char* t) {
+  String s = t;
+  s.replace("@/", g_fd_dir + "/");
+  return s;
+}
 static constexpr uint64_t FD_DISK_SIZE = 512ull << 20;
-static constexpr int FD_CHUNK = 256 << 10;
+static constexpr int FD_CHUNK = 64 << 10;     // the download's buffer (the zip's central directory: its tail)
+// The pieces asked for: small, as what is on its way waits in DMA-capable internal RAM (lwIP's buffers; its TCP window
+// is 64 KB), of which a running PC leaves ~8 KB: with larger pieces it all went, and the AES unit decrypting TLS
+// couldn't have its DMA descriptors (linux_install.h, the same)
+static constexpr int FD_PIECE = 16 << 10;
+static constexpr int FD_DISK_HEAD = 320 * 512;   // C.IMG's sectors with data: up to 63 + 1 + 252 (fd_make_disk)
 
 enum FdState { FD_IDLE, FD_RUNNING, FD_FAILED };
 static volatile FdState g_fd_state = FD_IDLE;
@@ -133,7 +158,12 @@ static bool fd_download(uint8_t* buf, uint8_t* dict, tinfl_decompressor* inf) {
     // the zip's central directory, at its end: where FD14LITE.img is, how long, its CRC
     fd_say("Connecting to freedos.org ...");
     g_fd_total = 0;
-    const int tail = fd_get(c, "-65536", buf, FD_CHUNK);
+    int tail = fd_get(c, "-16384", buf, FD_CHUNK);   // (the central directory: in the last 16 KB, else 64 KB)
+    for (int i = tail - 22; i >= 0 && tail == 16384; --i)
+      if (le32(buf + i) == 0x06054b50) {
+        if (le32(buf + i + 16) < g_fd_total - tail) tail = fd_get(c, "-65536", buf, FD_CHUNK);
+        break;
+      }
     if (tail < 22 || !g_fd_total) { fd_say("Could not reach download.freedos.org"); break; }
     int eocd = -1;
     for (int i = tail - 22; i >= 0 && eocd < 0; --i)
@@ -162,7 +192,7 @@ static bool fd_download(uint8_t* buf, uint8_t* dict, tinfl_decompressor* inf) {
     unlink(FD_SETUP);
     if (esp_vfs_fat_create_contiguous_file("/sdcard", FD_SETUP, usize, false) != ESP_OK ||
         !(out = fopen(FD_SETUP, "r+b"))) {
-      fd_say("Can't make %s (card full?)", FD_SETUP + 8);
+      fd_say("Can't make FDSETUP.IMG (card full?)");
       break;
     }
     tinfl_init(inf);
@@ -170,12 +200,15 @@ static bool fd_download(uint8_t* buf, uint8_t* dict, tinfl_decompressor* inf) {
     uint32_t got_crc = 0, written = 0;
     bool done = false, bad = false;
     for (uint64_t at = 0; at < csize && !done && !bad;) {
-      const uint32_t n = (uint32_t)std::min<uint64_t>(FD_CHUNK, csize - at);
+      const uint32_t n = (uint32_t)std::min<uint64_t>(FD_PIECE, csize - at);
       snprintf(r, sizeof(r), "%llu-%llu", (unsigned long long)(data0 + at), (unsigned long long)(data0 + at + n - 1));
       if (fd_get(c, r, buf, FD_CHUNK) != (int)n) { fd_say("Download failed: the connection was lost"); bad = true; break; }
       at += n;
-      g_fd_pct = (int)(at * 100 / csize);
-      fd_say("Downloading FreeDOS 1.4: %d%%  (%u of %u KB)", g_fd_pct, (unsigned)(at >> 10), (unsigned)(csize >> 10));
+      const int pct = (int)(at * 100 / csize);
+      if (pct != g_fd_pct || at == csize) {   // (said when the percentage changes)
+        g_fd_pct = pct;
+        fd_say("Downloading FreeDOS 1.4: %d%%  (%u of %u KB)", pct, (unsigned)(at >> 10), (unsigned)(csize >> 10));
+      }
       size_t in_ofs = 0;
       for (;;) {   // unzip what came (the ring buffer is the dictionary: 32 KB)
         size_t in_n = n - in_ofs, out_n = TINFL_LZ_DICT_SIZE - dict_ofs;
@@ -216,7 +249,7 @@ static const char* FD_INI_INSTALL =
     "; FDSETUP.IMG is FreeDOS's LiteUSB disk (the installer), C.IMG the PC's own disk it installs to (drive D: while\r\n"
     "; installing), NOCD.ISO an empty CD-ROM drive the installer wants. When the PC restarts with FreeDOS on C.IMG,\r\n"
     "; the firmware starts it from C.IMG alone (and deletes FDSETUP.IMG and NOCD.ISO).\r\n"
-    "[pc]\r\nhda = /sdcard/FDSETUP.IMG\r\nhdb = /sdcard/C.IMG\r\ncdc = /sdcard/NOCD.ISO\r\n"
+    "[pc]\r\nhda = @/FDSETUP.IMG\r\nhdb = @/C.IMG\r\ncdc = @/NOCD.ISO\r\n"
     "mem_size = 16M\r\nvga_mem_size = 2M\r\nfill_cmos = 1\r\n"
     "[cpu]\r\ngen = 4\r\nfpu = 1\r\n"
     "[tab5]\r\ninstall = 1\r\n";
@@ -226,7 +259,7 @@ static const char* FD_INI_FINAL =
     "; FreeDOS 1.4, installed on C.IMG by its own installer.\r\n"
     "[pc]\r\n"
     "; hard disks hda hdb hdc hdd, CD-ROMs cda cdb cdc cdd (an .iso), floppies fda fdb (1.44 MB etc. images)\r\n"
-    "hda = /sdcard/C.IMG\r\n;hdb = /sdcard/D.IMG\r\n;fda = /sdcard/floppy.img\r\n"
+    "hda = @/C.IMG\r\n;hdb = /sdcard/D.IMG\r\n;fda = /sdcard/floppy.img\r\n"
     "; a CD-ROM drive: also delete the \"rem\" before CDROM.BAT's call in C:\\FDAUTO.BAT (its driver)\r\n"
     ";cdc = /sdcard/cd.iso\r\n"
     "mem_size = 16M\r\nvga_mem_size = 2M\r\n"
@@ -256,7 +289,7 @@ static const char* FD_INI_ISO =
     "; Tab5 PC machine settings, written by the firmware: the PC starts from the CD (%s) while C.IMG has no\r\n"
     "; files, and from C.IMG once something is installed on it (the BIOS tries the hard disk first). Without the CD\r\n"
     "; in the drive: delete the cdc line.\r\n"
-    "[pc]\r\nhda = /sdcard/C.IMG\r\ncdc = /sdcard/%s\r\n"
+    "[pc]\r\nhda = @/C.IMG\r\ncdc = /sdcard/%s\r\n"
     "mem_size = 16M\r\nvga_mem_size = 2M\r\nfill_cmos = 1\r\n"
     "[cpu]\r\ngen = 4\r\nfpu = 1\r\n"
     "; until a system is on C.IMG (the firmware deletes this then)\r\n"
@@ -382,7 +415,7 @@ static bool fd_install_finish() {
     return true;
   }
   fd_fix_startup(false);
-  if (!fd_write_file(FD_INI, FD_INI_FINAL)) return false;
+  if (!fd_write_file(FD_INI, fd_ini_text(FD_INI_FINAL).c_str())) return false;
   unlink(FD_SETUP);
   unlink(FD_NOCD);
   g_install_mode = 0;
@@ -459,26 +492,31 @@ static void fd_format(uint8_t* p, uint32_t start, uint32_t count) {
 }
 
 // C.IMG, 512 MB in one piece: partitioned (fd_mbr) and formatted (fd_format), the rest of its first MB blank
-static bool fd_make_disk(uint8_t* buf) {
+static bool fd_make_disk() {
   fd_say("Making the PC's disk (C.IMG, 512 MB) ...");
+  uint8_t* buf = (uint8_t*)heap_caps_aligned_alloc(128, FD_DISK_HEAD, MALLOC_CAP_SPIRAM);   // (a PC running: its own)
+  if (!buf) { fd_say("Not enough memory to make C.IMG"); return false; }
   if (esp_vfs_fat_create_contiguous_file("/sdcard", FD_DISK, FD_DISK_SIZE, true) != ESP_OK) {
     fd_say("Can't make C.IMG: the card needs 550 MB free");
     return false;
   }
   FILE* f = fopen(FD_DISK, "r+b");
   bool ok = f != nullptr;
-  memset(buf, 0, FD_CHUNK);
-  fd_format(buf + 63 * 512, 63, fd_mbr(buf, FD_DISK_SIZE));   // (within the first chunk: up to sector 63 + 1 + 252)
+  memset(buf, 0, FD_DISK_HEAD);
+  fd_format(buf + 63 * 512, 63, fd_mbr(buf, FD_DISK_SIZE));   // (within FD_DISK_HEAD: up to sector 63 + 1 + 252)
   JitHold hold;   // (tab5_386.ino: core 0's cache operations on PSRAM)
-  esp_cache_msync(buf, FD_CHUNK, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
-  for (int i = 0; ok && i < (1 << 20) / FD_CHUNK; ++i) {
-    ok = fwrite(buf, 1, FD_CHUNK, f) == (size_t)FD_CHUNK;
-    if (i == 0) {
-      memset(buf, 0, FD_CHUNK);
-      esp_cache_msync(buf, FD_CHUNK, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+  esp_cache_msync(buf, FD_DISK_HEAD, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+  for (int at = 0; ok && at < (1 << 20);) {   // the first MB: the data, then zeros
+    const int n = std::min(FD_DISK_HEAD, (1 << 20) - at);
+    ok = fwrite(buf, 1, n, f) == (size_t)n;
+    if (at == 0) {
+      memset(buf, 0, FD_DISK_HEAD);
+      esp_cache_msync(buf, FD_DISK_HEAD, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
     }
+    at += n;
   }
   if (f && fclose(f) != 0) ok = false;
+  free(buf);
   if (!ok) {
     fd_say("Writing to the card failed");
     unlink(FD_DISK);
@@ -494,18 +532,19 @@ static bool fd_install_run() {
   do {
     if (!buf || !dict || !inf) { fd_say("Not enough memory"); break; }
     struct stat st;
-    if (stat(FD_DISK, &st) == 0) { fd_say("C.IMG is already on the card: delete it first (it isn't replaced)"); break; }
+    if (stat(FD_DISK, &st) == 0) { fd_say("%s/C.IMG is already on the card: delete it first (it isn't replaced)", g_fd_dir.c_str() + 7); break; }
+    mkdir(g_fd_dir.c_str(), 0777);
     if (g_fd_from_iso) {   // the CD the user put on the card: a blank C: drive, and the PC starts from the CD
       char ini[1024];
       snprintf(ini, sizeof(ini), FD_INI_ISO, g_fd_iso, g_fd_iso);
-      if (!fd_make_disk(buf)) break;
-      if (!fd_write_file(FD_INI, ini)) { fd_say("Writing to the card failed"); unlink(FD_DISK); break; }
+      if (!fd_make_disk()) break;
+      if (!fd_write_file(FD_INI, fd_ini_text(ini).c_str())) { fd_say("Writing to the card failed"); unlink(FD_DISK); break; }
       ok = true;
       break;
     }
     if (!fd_download_psram_tls(buf, dict, inf)) break;
-    if (!fd_make_disk(buf)) { unlink(FD_SETUP); break; }
-    if (!fd_write_file(FD_NOCD, "") || !fd_write_file(FD_INI, FD_INI_INSTALL)) {
+    if (!fd_make_disk()) { unlink(FD_SETUP); break; }
+    if (!fd_write_file(FD_NOCD, "") || !fd_write_file(FD_INI, fd_ini_text(FD_INI_INSTALL).c_str())) {
       fd_say("Writing to the card failed");
       unlink(FD_DISK);
       unlink(FD_SETUP);
@@ -530,15 +569,22 @@ static void fd_install_task(void*) {
       g_fd_state = FD_FAILED;
       continue;
     }
-    fd_say(g_fd_from_iso ? "Done. Restarting from the CD ..." : "Done. Restarting into FreeDOS's installer ...");
+    if (!g_fd_from_iso) {   // (in install mode: install_mode_run remembers the machine and restarts; not from here,
+      g_fd_state = FD_IDLE;   // a task with its stack in PSRAM, which mustn't write to flash: NVS)
+      fd_say("Done. Restarting into FreeDOS's installer ...");
+      continue;
+    }
+    fd_say("Done. Restarting from the CD ...");
     delay(1500);
     tab5_restart();
   }
 }
 
-static void fd_install_start(bool from_iso) {
+// The install of the default machine (name "": an empty card, or an installer CD there), or of one named
+static void fd_install_start(bool from_iso, const char* name = "") {
   if (g_fd_state == FD_RUNNING) return;
   g_fd_from_iso = from_iso && g_fd_iso[0];
+  fd_use(name[0] && !g_fd_from_iso ? "/sdcard/tiny386-" + String(name) + ".ini" : String("/sdcard/tiny386.ini"));
   if (!g_fd_task && xTaskCreatePinnedToCoreWithCaps(fd_install_task, "fdinstall", 24576, nullptr, 1, &g_fd_task, 0,
                                                     MALLOC_CAP_SPIRAM) != pdPASS) {
     g_fd_task = nullptr;

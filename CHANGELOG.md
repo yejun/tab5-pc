@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Machines: the settings panel's **Machine** frame lists `default` (`/tiny386.ini`) and the machines named N
+  (`/tiny386-N.ini`, their files in `/N`), and restarts into the one chosen, which stays chosen through every restart.
+- **Install DOS** and **Install Linux** make a named machine: FreeDOS 1.4 (its own installer), or the latest
+  [Sprig Linux](https://github.com/yejun/sprig-linux) release, every file checked against its checksums (installing
+  it again with the same name updates its kernel, keeping its files). The Tab5 restarts into an install mode for it,
+  with no PC running (all the memory free), then into the new machine. The empty card's **Install FreeDOS 1.4** asks
+  for a name too.
 - The fast interpreter (used with the translator off, and by the translator for what it leaves) is about 1.5 times
   as fast: its handlers in 16-bit, 32-bit and generic copies, cheaper memory and window checks, and pre-decoded
   blocks (`t386_fast_pd.h`; serial `pd`, `pd 0|1`), kept in the translator's code cache while it is off. A game's
