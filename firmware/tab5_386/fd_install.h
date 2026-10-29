@@ -54,13 +54,12 @@ enum FdState { FD_IDLE, FD_RUNNING, FD_FAILED };
 static volatile FdState g_fd_state = FD_IDLE;
 static volatile int g_fd_pct = 0;       // the download's progress
 static char g_fd_msg[120] = "";         // what it is doing, or why it failed (the settings panel shows it)
-static bool g_setup_needed = false;     // no disks on the card (load_config): the panel offers the install
+static bool g_setup_needed = false;     // no disks on the card (load_config): the panel opens, to install a machine
 // tiny386.ini's [tab5] install: 1, FreeDOS's installer is running (from FDSETUP.IMG); 2, the PC starts from an
-// installer CD, and C.IMG has no system yet. (Installs ran with the translator off for a while: two of five had
-// stopped partway, from the code sync fixed since, src/t386_i386.c.)
+// installer CD, and C.IMG has no system yet (set up by 1.2.0 and before, which offered an .iso on an empty card).
+// (Installs ran with the translator off for a while: two of five had stopped partway, from the code sync fixed since,
+// src/t386_i386.c.)
 static int g_install_mode = 0;
-static char g_fd_iso[80] = "";          // an installer CD image at the card's root (an empty card): offered as well
-static bool g_fd_from_iso = false;      // the install asked for: from g_fd_iso (else FreeDOS's download)
 
 static void fd_say(const char* fmt, ...) {
   va_list ap;
@@ -266,35 +265,6 @@ static const char* FD_INI_FINAL =
     "; 1: the hard disks' geometry in the CMOS (some systems want it, others not)\r\nfill_cmos = 1\r\n"
     "[cpu]\r\n; 3/4/5/6 = 386/486/586/686\r\ngen = 4\r\n; 1 = x87 maths coprocessor\r\nfpu = 1\r\n";
 
-// An installer CD's ISO image at the card's root (not our NOCD.ISO): the first one, into g_fd_iso
-static void fd_find_iso() {
-  DIR* d = opendir("/sdcard");
-  if (!d) return;
-  while (struct dirent* e = readdir(d)) {
-    const size_t n = strlen(e->d_name);
-    if (n < 5 || n >= sizeof(g_fd_iso) || strcasecmp(e->d_name + n - 4, ".iso") || !strcasecmp(e->d_name, "NOCD.ISO"))
-      continue;
-    char path[100];
-    snprintf(path, sizeof(path), "/sdcard/%s", e->d_name);
-    struct stat st;
-    if (stat(path, &st) == 0 && S_ISREG(st.st_mode) && st.st_size >= (1 << 20)) {
-      strcpy(g_fd_iso, e->d_name);
-      break;
-    }
-  }
-  closedir(d);
-}
-
-static const char* FD_INI_ISO =
-    "; Tab5 PC machine settings, written by the firmware: the PC starts from the CD (%s) while C.IMG has no\r\n"
-    "; files, and from C.IMG once something is installed on it (the BIOS tries the hard disk first). Without the CD\r\n"
-    "; in the drive: delete the cdc line.\r\n"
-    "[pc]\r\nhda = @/C.IMG\r\ncdc = /sdcard/%s\r\n"
-    "mem_size = 16M\r\nvga_mem_size = 2M\r\nfill_cmos = 1\r\n"
-    "[cpu]\r\ngen = 4\r\nfpu = 1\r\n"
-    "; until a system is on C.IMG (the firmware deletes this then)\r\n"
-    "[tab5]\r\ninstall = 2\r\n";
-
 // text into the file at path, in pieces under a sector, unbuffered: FatFs copies each through its own sector buffer.
 // (Given 512 bytes or more at a sector's start, FatFs hands the caller's memory to the card's DMA, which needs it
 // 128-byte aligned in DMA-capable memory: FD_INI_FINAL, in flash, failed so, "sdmmc_write_blocks failed (0x102)",
@@ -405,7 +375,7 @@ static bool fd_install_finish() {
       for (size_t n; (n = fread(buf, 1, sizeof(buf), f)) > 0;) ini.concat(buf, n);
       fclose(f);
     }
-    for (const char* line : {"; until a system", "[tab5]", "install = 2"}) {   // (FD_INI_ISO's last lines)
+    for (const char* line : {"; until a system", "[tab5]", "install = 2"}) {   // (the ini's last lines)
       const int at = ini.indexOf(line), nl = at < 0 ? -1 : ini.indexOf('\n', at);
       if (at >= 0) ini.remove(at, nl < 0 ? ini.length() - at : nl + 1 - at);
     }
@@ -534,14 +504,6 @@ static bool fd_install_run() {
     struct stat st;
     if (stat(FD_DISK, &st) == 0) { fd_say("%s/C.IMG is already on the card: delete it first (it isn't replaced)", g_fd_dir.c_str() + 7); break; }
     mkdir(g_fd_dir.c_str(), 0777);
-    if (g_fd_from_iso) {   // the CD the user put on the card: a blank C: drive, and the PC starts from the CD
-      char ini[1024];
-      snprintf(ini, sizeof(ini), FD_INI_ISO, g_fd_iso, g_fd_iso);
-      if (!fd_make_disk()) break;
-      if (!fd_write_file(FD_INI, fd_ini_text(ini).c_str())) { fd_say("Writing to the card failed"); unlink(FD_DISK); break; }
-      ok = true;
-      break;
-    }
     if (!fd_download_psram_tls(buf, dict, inf)) break;
     if (!fd_make_disk()) { unlink(FD_SETUP); break; }
     if (!fd_write_file(FD_NOCD, "") || !fd_write_file(FD_INI, fd_ini_text(FD_INI_INSTALL).c_str())) {
@@ -569,22 +531,17 @@ static void fd_install_task(void*) {
       g_fd_state = FD_FAILED;
       continue;
     }
-    if (!g_fd_from_iso) {   // (in install mode: install_mode_run remembers the machine and restarts; not from here,
-      g_fd_state = FD_IDLE;   // a task with its stack in PSRAM, which mustn't write to flash: NVS)
-      fd_say("Done. Restarting into FreeDOS's installer ...");
-      continue;
-    }
-    fd_say("Done. Restarting from the CD ...");
-    delay(1500);
-    tab5_restart();
+    // (install_mode_run remembers the machine and restarts; not from here, a task with its stack in PSRAM, which
+    // mustn't write to flash: NVS)
+    g_fd_state = FD_IDLE;
+    fd_say("Done. Restarting into FreeDOS's installer ...");
   }
 }
 
-// The install of the default machine (name "": an empty card, or an installer CD there), or of one named
-static void fd_install_start(bool from_iso, const char* name = "") {
+// The install of the machine named name (in install mode)
+static void fd_install_start(const char* name) {
   if (g_fd_state == FD_RUNNING) return;
-  g_fd_from_iso = from_iso && g_fd_iso[0];
-  fd_use(name[0] && !g_fd_from_iso ? "/sdcard/tiny386-" + String(name) + ".ini" : String("/sdcard/tiny386.ini"));
+  fd_use("/sdcard/tiny386-" + String(name) + ".ini");
   if (!g_fd_task && xTaskCreatePinnedToCoreWithCaps(fd_install_task, "fdinstall", 24576, nullptr, 1, &g_fd_task, 0,
                                                     MALLOC_CAP_SPIRAM) != pdPASS) {
     g_fd_task = nullptr;

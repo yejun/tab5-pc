@@ -2,8 +2,8 @@
 
 A PC emulated on the M5Stack Tab5, built on [tiny386](https://github.com/hchunhui/tiny386): a 386/486 with VGA, a
 PS/2 keyboard and mouse, a Sound Blaster 16, AdLib and PC speaker, IDE hard disks, CD-ROM images, floppies and
-SeaBIOS. It runs DOS. On an empty SD card it downloads and installs FreeDOS by itself; files are copied to it over
-Wi-Fi from a browser.
+SeaBIOS. It runs DOS and Linux. On an empty SD card it downloads and installs FreeDOS or
+[Sprig Linux](https://github.com/yejun/sprig-linux) by itself; files are copied to it over Wi-Fi from a browser.
 
 ![FreeDOS's first start on the Tab5](docs/images/first-boot.png)
 
@@ -53,8 +53,9 @@ v3.x for later ones: `CHIP=postv3 tools/build.sh upload`. A build for the wrong 
 ## First start: FreeDOS on an empty card
 
 1. Put an empty card in the Tab5 and switch it on. With nothing on the card, the settings panel opens with Wi-Fi
-   on: choose your network on the right, then tap **Install FreeDOS 1.4** and give the machine a name (for example
-   `dos`; tap again to confirm). The Tab5 restarts into its install mode, with no PC running, and shows how it goes.
+   on: choose your network on the right, then tap **Install DOS** in the Machine frame and give the machine a name
+   (for example `dos`; tap again to confirm). The Tab5 restarts into its install mode, with no PC running, and shows
+   how it goes. (**Install Linux** sets up Sprig Linux instead: see [More machines](#more-machines-dos-and-linux-side-by-side).)
 
    ![The settings panel on an empty card](docs/images/panel-install.png)
 
@@ -78,9 +79,10 @@ the install is done.
 
 **Other ways to start:**
 
-- **An installer CD**: put an `.iso` of a bootable installer CD (for example FreeDOS's LiveCD) at the root of the
-  empty card. The panel then also offers to start the PC from it, with a new, empty `C.IMG`. The PC starts from the
-  CD while C: has no files, and from C: once something is installed on it.
+- **An installer CD**: put the `.iso` of a bootable installer CD (for example FreeDOS's LiveCD) on the card, make an
+  empty hard disk (`.venv/bin/python tools/dosdisk.py new sdcard/C.IMG --mb 500`, copied to the card) and write a
+  `tiny386.ini` with `hda = /sdcard/C.IMG` and `cdc = /sdcard/<name>.iso` (see [Settings](#settings)). The BIOS tries
+  the hard disk first, so the PC starts from the CD while C: is empty, and from C: once a system is installed on it.
 - **Prepare the card on a computer**: `.venv/bin/python tools/make_sdcard.py` makes `sdcard/C.IMG` (FreeDOS 1.4
   with all its packages, 32 MB), `sdcard/D.IMG` (504 MB, empty) and a matching `sdcard/tiny386.ini`. Copy the three
   files to the root of the card. It starts straight at the `C:\>` prompt.
@@ -101,6 +103,8 @@ new machine.
   with a graphics console (800 x 600); the machine's settings file says how to use the text console instead.
   Installing Linux again with the same name updates it: its kernel and loader are replaced, its disk (`root.img`,
   your files) is kept.
+
+  ![Sprig Linux's first start on the Tab5](docs/images/linux-boot.png)
 
 A name already on the card (its settings file or its folder) can't be used again, except to update Sprig Linux. If an
 install fails, the screen says why, and a tap goes back to the machine there was. Serial: `machines`,

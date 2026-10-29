@@ -729,13 +729,6 @@ static void handle_serial() {
       else install_request(dos ? 'd' : 'l', name.c_str());   // (the Tab5 restarts into the install)
     } else if (line == "linux") {
       Serial.printf("linux: %s (%d%%)\n", g_lx_msg, (int)g_lx_pct);
-    } else if (line == "install freedos") {   // the settings panel's "Install FreeDOS" (fd_install.h), on an empty card
-      if (!g_setup_needed) Serial.println("install: only on a card without tiny386.ini or disk images");
-      else if (g_wifi != WIFI_UP) Serial.println("install: Wi-Fi isn't up");
-      else fd_install_start(false);
-    } else if (line == "install iso") {   // ... "Use <name>.iso": a blank C.IMG and the PC started from the CD
-      if (!g_setup_needed || !g_fd_iso[0]) Serial.println("install: only on a card with an .iso and no tiny386.ini or disks");
-      else fd_install_start(true);
     } else if (line == "reset") {
       pc_cold_reset();
       Serial.println("reset");
@@ -763,7 +756,7 @@ static void display_task(void*) {
   int64_t last_refresh = 0;
   uint32_t last_hash = 0;
   bool stopped_shown = false;
-  if (g_setup_needed) {   // nothing on the card yet: Wi-Fi on, and the panel's "Install FreeDOS"
+  if (g_setup_needed) {   // nothing on the card yet: Wi-Fi on, and the panel's Install DOS / Install Linux
     wifi_enable(true);
     panel_open();
   } else if (g_prefs.getBool("wifiback", false)) {   // restarted with WiFi on (web.h, restart_tab5): on again
@@ -910,7 +903,7 @@ static void install_mode_run() {
     Serial.printf("install: %s, Wi-Fi up (DMA-capable internal RAM %u free, PSRAM %u)\n", req.c_str(),
                   (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL),
                   (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
-    if (kind == 'd') fd_install_start(false, name.c_str());
+    if (kind == 'd') fd_install_start(name.c_str());
     else lx_install_start(name.c_str());
     String shown;
     for (;;) {
@@ -971,11 +964,9 @@ static void load_config(PCConfig& conf, bool have_sd) {
       Serial.printf("floppy %d: %s not found, left out\n", i, conf.fdd[i]);
       conf.fdd[i] = nullptr;
     }
-  // an empty card: the settings panel offers to install FreeDOS (fd_install.h)
-  // (CD images don't count: an installer CD there is offered as well)
+  // an empty card: the settings panel opens, to install a machine (CD images don't count)
   g_setup_needed = have_sd && !file_exists("/sdcard/tiny386.ini") && !conf.disks[0] && !conf.disks[1] &&
                    !conf.fdd[0] && !conf.fdd[1];
-  if (g_setup_needed) fd_find_iso();
   Serial.printf("pc: %ld KB RAM, %ld KB video, %d86%s | hda %s | hdb %s | hdc %s | hdd %s | fda %s | fdb %s\n",
                 conf.mem_size / 1024, conf.vga_mem_size / 1024, conf.cpu_gen, conf.fpu ? " + FPU" : "",
                 conf.disks[0] ?: "-", conf.disks[1] ?: "-", conf.disks[2] ?: "-", conf.disks[3] ?: "-",

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Make and fill DOS hard disk images (one FAT partition) on the PC, for the Tab5 PC's SD card.
 
-    tools/dosdisk.py new D.IMG [--mb 504] [--label DATA]   a blank, formatted disk (FAT16, up to 2047 MB)
+    tools/dosdisk.py new D.IMG [--mb 504] [--label DATA]   a blank, formatted disk (FAT16, up to 2047 MB); as C:
+                                                           it boots the next device (a CD) while it has no files
     tools/dosdisk.py ls D.IMG [DIR]                        list a directory
     tools/dosdisk.py put D.IMG SRC... DEST                 copy files or directories in (DEST is a directory)
     tools/dosdisk.py get D.IMG SRC DEST                    copy a file out
@@ -49,6 +50,16 @@ def chs(lba):
     return bytes([h, (s + 1) | (c >> 8) << 6, c & 0xFF])
 
 
+def mbr_code():
+    """The boot code the firmware gives a new C.IMG (firmware/tab5_386/mbr_code.h, from tools/mbr/mbr.S): it starts
+    the active partition, or the next boot device (INT 18h) while the partition's root directory has no files."""
+    with open(os.path.join(ROOT, "firmware", "tab5_386", "mbr_code.h")) as f:
+        text = f.read()
+    code = bytes(int(x, 16) for x in text[text.index("{"):text.index("}")].replace(",", " ").split() if x.startswith("0x"))
+    assert len(code) == 446
+    return code
+
+
 def new(path, mb, label):
     if os.path.exists(path):
         sys.exit(f"{path} exists; delete it first")
@@ -60,6 +71,7 @@ def new(path, mb, label):
     with open(path, "wb") as f:
         f.truncate(total * 512)
         mbr = bytearray(512)
+        mbr[0:446] = mbr_code()
         mbr[446:462] = bytes([0x80]) + chs(START) + bytes([ptype]) + chs(START + count - 1) + struct.pack("<II", START, count)
         mbr[510:512] = b"\x55\xaa"
         f.write(mbr)

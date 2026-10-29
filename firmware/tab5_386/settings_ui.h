@@ -25,8 +25,6 @@ static lv_display_t* g_disp;
 static lv_obj_t *ui_wifi, *ui_addr, *ui_pcstate, *ui_list, *ui_scan_lbl, *ui_pause_lbl, *ui_reset_lbl;
 static lv_obj_t *ui_modal, *ui_modal_title, *ui_ta_ssid, *ui_ta_pass, *ui_show_btn, *ui_msg, *ui_spinner, *ui_kb;
 static lv_obj_t *ui_connect_btn, *ui_bri, *ui_vol, *ui_mouse, *ui_wifi_sw, *ui_batt, *ui_aspect_sw;
-static lv_obj_t *ui_dc, *ui_fd, *ui_fd_msg, *ui_fd_bar, *ui_fd_btn, *ui_fd_iso, *ui_dc_cap, *ui_fd_cap;   // the sliders; or, the card empty, installing
-                                                                    // FreeDOS (fd_install.h) in their place
 static lv_obj_t *ui_mach_dd, *ui_mach_start, *ui_inst_msg, *ui_dos_btn, *ui_lnx_btn;   // the machines
 static int64_t g_start_armed = 0;   // "Start" tapped once at this time (as Reset PC: it restarts the Tab5)
 // The dialog: a Wi-Fi network's name and password, or a new machine's name (Install DOS / Install Linux)
@@ -226,7 +224,7 @@ static void ui_fill_machines() {
     opts += g_machines[i].name;
     if (machine_path() == "/sdcard/" + String(g_machines[i].file)) cur = i;
   }
-  lv_dropdown_set_options(ui_mach_dd, g_machine_count ? opts.c_str() : "(no settings file on the card)");
+  lv_dropdown_set_options(ui_mach_dd, g_machine_count ? opts.c_str() : "(none yet)");
   lv_dropdown_set_selected(ui_mach_dd, cur);
   g_start_armed = 0;
 }
@@ -274,43 +272,19 @@ static void ui_refresh_status() {
     else lv_obj_remove_state(ui_mach_start, LV_STATE_DISABLED);
     // a new machine: DOS (fd_install.h) or Linux (linux_install.h), installed after a restart with no PC
     const bool net = !g_ssid.isEmpty();
-    const char* msg = net ? "A new machine: DOS (FreeDOS 1.4, an 18 MB download, then its own installer) or Linux "
-                            "(Sprig Linux, 10 MB, 140 MB on the card). The Tab5 restarts to install it."
-                          : "A new machine, DOS or Linux: set up Wi-Fi first (a network on the right).";
+    // (no machine: an empty card, where the panel opens by itself, with Wi-Fi on)
+    const char* msg =
+        !net && !g_machine_count ? "No machine on the card yet: choose a Wi-Fi network on the right, then install DOS "
+                                   "or Linux."
+        : !net ? "A new machine, DOS or Linux: set up Wi-Fi first (a network on the right)."
+        : !g_machine_count ? "No machine yet: DOS (FreeDOS 1.4, an 18 MB download, then its own installer) or Linux "
+                             "(Sprig Linux, 10 MB, 140 MB on the card). The Tab5 restarts to install it."
+        : "A new machine: DOS (FreeDOS 1.4, an 18 MB download, then its own installer) or Linux (Sprig Linux, 10 MB, "
+          "140 MB on the card). The Tab5 restarts to install it.";
     if (strcmp(lv_label_get_text(ui_inst_msg), msg)) lv_label_set_text(ui_inst_msg, msg);
     for (lv_obj_t* b : {ui_dos_btn, ui_lnx_btn}) {
       if (net) lv_obj_remove_state(b, LV_STATE_DISABLED);
       else lv_obj_add_state(b, LV_STATE_DISABLED);
-    }
-  }
-  if (g_setup_needed) {   // (known after the panel is made: load_config)
-    lv_obj_add_flag(ui_dc, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(ui_dc_cap, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_remove_flag(ui_fd, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_remove_flag(ui_fd_cap, LV_OBJ_FLAG_HIDDEN);
-    const bool running = g_fd_state == FD_RUNNING, up = g_wifi == WIFI_UP;
-    static char iso_msg[200];
-    snprintf(iso_msg, sizeof(iso_msg), "No PC disks on the card yet. Install FreeDOS 1.4 (downloaded, 18 MB), or "
-             "start the PC from %s with a new, empty C: drive%s.", g_fd_iso, up ? "" : " (FreeDOS: Wi-Fi first)");
-    const char* msg = g_fd_state != FD_IDLE ? g_fd_msg
-                      : g_fd_iso[0] ? iso_msg
-                      : up ? "No PC disks on the card yet. FreeDOS 1.4 is downloaded (18 MB), then its own installer "
-                             "runs: answer its questions, and it sets up drive C: (about 15 minutes)."
-                           : "No PC disks on the card yet. Connect to Wi-Fi (on the right), then install FreeDOS.";
-    if (strcmp(lv_label_get_text(ui_fd_msg), msg)) lv_label_set_text(ui_fd_msg, msg);
-    lv_obj_set_style_text_color(ui_fd_msg, lv_color_hex(g_fd_state == FD_FAILED ? C_WARN : C_INK), 0);
-    if (running) lv_obj_remove_flag(ui_fd_bar, LV_OBJ_FLAG_HIDDEN);
-    else lv_obj_add_flag(ui_fd_bar, LV_OBJ_FLAG_HIDDEN);
-    lv_bar_set_value(ui_fd_bar, g_fd_pct, LV_ANIM_OFF);
-    if (up && !running) lv_obj_remove_state(ui_fd_btn, LV_STATE_DISABLED);
-    else lv_obj_add_state(ui_fd_btn, LV_STATE_DISABLED);
-    if (g_fd_iso[0]) {   // two buttons side by side: the download, and the CD image
-      lv_obj_set_width(ui_fd_btn, 220);
-      lv_label_set_text(lv_obj_get_child(ui_fd_btn, 0), LV_SYMBOL_DOWNLOAD "  FreeDOS");
-      lv_obj_remove_flag(ui_fd_iso, LV_OBJ_FLAG_HIDDEN);
-      lv_label_set_text_fmt(lv_obj_get_child(ui_fd_iso, 0), LV_SYMBOL_DRIVE "  %s", g_fd_iso);
-      if (!running) lv_obj_remove_state(ui_fd_iso, LV_STATE_DISABLED);
-      else lv_obj_add_state(ui_fd_iso, LV_STATE_DISABLED);
     }
   }
 }
@@ -859,44 +833,7 @@ static void ui_setup() {
     g_prefs.putBool("aspect43", g_aspect43);   // (drawn so when the panel closes: g_redraw_pc)
   }, LV_EVENT_VALUE_CHANGED, nullptr);
   ui_switch_label(asp, ui_aspect_sw);
-  lv_obj_t* dc_cap = ui_caption(scr, "Screen, sound, touchpad", LX, DY, LW);
-
-  // an empty card: FreeDOS from freedos.org, in place of the sliders (fd_install.h; shown by ui_refresh_status)
-  ui_dc = dc;
-  ui_dc_cap = dc_cap;
-  {
-    ui_fd = ui_card(scr, LX, DY, LW, 222);
-    lv_obj_add_flag(ui_fd, LV_OBJ_FLAG_HIDDEN);
-    ui_fd_msg = ui_label(ui_fd, "", &lv_font_montserrat_20, C_INK);   // (prose: the smaller face)
-    lv_label_set_long_mode(ui_fd_msg, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(ui_fd_msg, lv_pct(100));
-    lv_obj_set_pos(ui_fd_msg, 0, 0);
-    ui_fd_bar = lv_bar_create(ui_fd);
-    lv_bar_set_range(ui_fd_bar, 0, 100);
-    lv_obj_set_size(ui_fd_bar, LW - 50, 14);
-    lv_obj_set_pos(ui_fd_bar, 0, 108);
-    lv_obj_set_style_radius(ui_fd_bar, 0, 0);
-    lv_obj_set_style_radius(ui_fd_bar, 0, LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(ui_fd_bar, lv_color_hex(C_DEEP), 0);
-    lv_obj_set_style_bg_color(ui_fd_bar, lv_color_hex(C_ACCENT), LV_PART_INDICATOR);
-    ui_fd_btn = ui_button(ui_fd, LV_SYMBOL_DOWNLOAD "  Install FreeDOS 1.4", [](lv_event_t*) {
-      ui_show_name_modal(MODAL_DOS);   // (a named machine, as from the Machine frame)
-    }, true);
-    lv_obj_set_size(ui_fd_btn, LW - 50, 48);
-    lv_obj_set_pos(ui_fd_btn, 0, 130);
-    ui_fd_iso = ui_button(ui_fd, "", [](lv_event_t*) {
-      fd_install_start(true);
-      ui_refresh_status();
-    }, true);
-    lv_obj_set_size(ui_fd_iso, 266, 48);
-    lv_obj_set_pos(ui_fd_iso, LW - 50 - 266, 130);
-    lv_obj_t* iso_l = lv_obj_get_child(ui_fd_iso, 0);   // (one line: a long name ends in "...")
-    lv_label_set_long_mode(iso_l, LV_LABEL_LONG_DOT);
-    lv_obj_set_size(iso_l, 242, 26);
-    lv_obj_add_flag(ui_fd_iso, LV_OBJ_FLAG_HIDDEN);
-    ui_fd_cap = ui_caption(scr, "FreeDOS", LX, DY, LW);
-    lv_obj_add_flag(ui_fd_cap, LV_OBJ_FLAG_HIDDEN);
-  }
+  ui_caption(scr, "Screen, sound, touchpad", LX, DY, LW);
 
   lv_obj_t* done = ui_button(scr, "Done", [](lv_event_t*) { panel_close(); }, true);
   lv_obj_set_pos(done, LX - 6, DY + 222 + 18);

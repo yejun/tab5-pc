@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- The settings panel on an empty card: no FreeDOS frame in place of the sliders any more; the Machine frame's
+  **Install DOS** and **Install Linux** set up the first machine, as any other (its list reads "(none yet)"). The
+  offer to start the PC from an installer CD's `.iso` at the card's root went with the frame (the README says how to
+  set that up by hand); a machine set up that way by 1.2.0 still finishes its install as before.
+- README: a screenshot of Sprig Linux starting; the empty card's panel.
+
 ## 1.2.0 (2026-10-28)
 
 Machines by name, with DOS and Linux installed from the settings panel; a faster fast interpreter; fixes. The firmware
