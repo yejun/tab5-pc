@@ -1,7 +1,11 @@
 # Changelog
 
-## Unreleased
+## 1.2.0 (2026-10-28)
 
+Machines by name, with DOS and Linux installed from the settings panel; a faster fast interpreter; fixes. The firmware
+image with its notices and corresponding source, as for 1.1.0.
+
+- `LICENSE` holds the plain MIT text (the list of third-party material is in `THIRD_PARTY_NOTICES.md`).
 - Machines: the settings panel's **Machine** frame lists `default` (`/tiny386.ini`) and the machines named N
   (`/tiny386-N.ini`, their files in `/N`), and restarts into the one chosen, which stays chosen through every restart.
 - **Install DOS** and **Install Linux** make a named machine: FreeDOS 1.4 (its own installer), or the latest
