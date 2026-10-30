@@ -33,6 +33,15 @@
 
 bool t386_jit_enabled = true;   // (serial "jit 0|1" on the Tab5: the fast path alone, for comparing)
 
+// The two biggest functions of the translator compiled for size: on the Tab5 its code runs from flash, and a
+// translation spends most of its time waiting for it there (instructions per cycle 0.31). Smaller, they wait less:
+// 47.4 -> 42.7 us a block (Linux starting; the whole translator for size, or -O2: 45.6, 44.7).
+#if defined(__GNUC__) && !defined(__clang__)
+#define JIT_SMALL __attribute__((optimize("Os")))
+#else
+#define JIT_SMALL
+#endif
+
 // ---------------------------------------------------------------------------------------------------------------
 // RISC-V instructions
 
@@ -3580,7 +3589,7 @@ static bool jt_fpu_call_core(const JIns *in, u32 *r)
 	return true;
 }
 
-static void jt_emit(const JIns *in)
+static JIT_SMALL void jt_emit(const JIns *in)
 {
 	int bits = in->opsz16 ? 16 : 32;
 	u8 b = in->op;
@@ -5020,7 +5029,7 @@ static bool jit_crossing_ok(CPUI386 *cpu, JitBlock *b)
 	return jit_code_phys(cpu, next) == (b->phys | 0xfff) + 1;
 }
 
-static JitBlock *jit_translate_n(CPUI386 *cpu, uword eip, uword lin, u8 mode, int max_ins, uword phys)
+static JIT_SMALL JitBlock *jit_translate_n(CPUI386 *cpu, uword eip, uword lin, u8 mode, int max_ins, uword phys)
 {
 	const bool paged = mode & JM_PAGED;
 	bool crossing = false;
