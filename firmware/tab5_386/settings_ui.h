@@ -727,8 +727,9 @@ static void ui_setup() {
   g_disp = lv_display_create(SCR_W, SCR_H);
   lv_display_set_color_format(g_disp, LV_COLOR_FORMAT_RGB565);
   lv_display_set_flush_cb(g_disp, ui_flush);
-  const size_t buf = SCR_W * 80 * 2;
-  lv_display_set_buffers(g_disp, ui_alloc(buf), ui_alloc(buf), buf, LV_DISPLAY_RENDER_MODE_PARTIAL);
+  const size_t buf = SCR_W * 80 * 2;   // (one: ui_flush is done when it returns, so a second would never be drawn in
+                                       // while the first is sent)
+  lv_display_set_buffers(g_disp, ui_alloc(buf), nullptr, buf, LV_DISPLAY_RENDER_MODE_PARTIAL);
   lv_display_set_theme(g_disp, lv_theme_default_init(g_disp, lv_color_hex(C_ACCENT), lv_color_hex(C_DIM), true,
                                                       &px_font_24));
   lv_indev_t* indev = lv_indev_create();

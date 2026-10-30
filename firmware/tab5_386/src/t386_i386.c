@@ -2,9 +2,14 @@
 #include "tab5_config.h"
 #pragma GCC optimize("O3")
 
-// the translator to RISC-V (t386_jit.h): its code cache in PSRAM, which this chip revision can execute
+// the translator to RISC-V (t386_jit.h): its code cache in PSRAM, which this chip revision can execute. It takes what
+// PSRAM has free when it starts (after the PC and its pictures) but 1.5 MB, for what comes after (WiFi's packets,
+// uploads, disks): a code cache of 3 to 8 MB.
 #define T386_JIT
 #define T386_JIT_CACHE_SIZE (3 << 20)
+#define T386_JIT_CACHE_MAX (8 << 20)
+#define T386_JIT_ROOM() t386_jit_room()
+#define T386_JIT_PAGEMAP(fill) t386_jit_pagemap(fill)
 // the fast path's pre-decoded blocks (t386_fast_pd.h): only while the translator is off, in its code cache (PSRAM
 // has little room left: WiFi's packets, uploads)
 #define T386_PD_ARENA 0
@@ -12,7 +17,49 @@
 #include "esp_heap_caps.h"
 #include "esp_cache.h"
 #include "esp_cpu.h"
+#include "esp_mmu_map.h"
+#include "hal/mmu_hal.h"
+#include "hal/mmu_ll.h"
 static void* t386_jit_alloc(size_t n) { return heap_caps_aligned_calloc(128, 1, n, MALLOC_CAP_SPIRAM); }
+static size_t t386_jit_room(void)
+{
+  const size_t free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+  return free > (3 << 19) ? free - (3 << 19) : 0;
+}
+// The pagemap (a byte per 4 KB page of the 4 GB address space: 1 MB of addresses) in 128 KB of PSRAM. The MMU maps
+// PSRAM in 64 KB pages: the first of the range (pages up to 256 MB, where RAM is) onto a page of its own, the 15 others
+// all onto one page that holds fill, which nothing writes. (Both pages from the heap, kept, their heap addresses no
+// longer used: their lines written back and dropped from the caches first, so none is written back over them later.)
+static uint8_t* t386_jit_pagemap(uint8_t fill)
+{
+  const size_t PG = 0x10000;
+  uint8_t* own = (uint8_t*)heap_caps_aligned_alloc(PG, PG, MALLOC_CAP_SPIRAM);
+  uint8_t* same = (uint8_t*)heap_caps_aligned_alloc(PG, PG, MALLOC_CAP_SPIRAM);
+  esp_paddr_t p_own, p_same;
+  mmu_target_t target;
+  void* map = NULL;
+  if (!own || !same || esp_mmu_vaddr_to_paddr(own, &p_own, &target) != ESP_OK ||
+      esp_mmu_vaddr_to_paddr(same, &p_same, &target) != ESP_OK || target != MMU_TARGET_PSRAM0 || (p_own | p_same) % PG ||
+      // a 1 MB range of addresses for it (mapped onto the start of PSRAM, then each page where it belongs)
+      esp_mmu_map(0, 16 * PG, MMU_TARGET_PSRAM0, MMU_MEM_CAP_READ | MMU_MEM_CAP_WRITE | MMU_MEM_CAP_8BIT | MMU_MEM_CAP_32BIT,
+                  ESP_MMU_MMAP_FLAG_PADDR_SHARED, &map) != ESP_OK) {
+    heap_caps_free(own);
+    heap_caps_free(same);
+    return NULL;
+  }
+  esp_cache_msync(own, PG, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+  esp_cache_msync(same, PG, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+  uint32_t len;
+  for (int i = 0; i < 16; i++)
+    mmu_hal_map_region(MMU_LL_PSRAM_MMU_ID, MMU_TARGET_PSRAM0, (uint32_t)map + i * PG, i ? p_same : p_own, PG, &len);
+  esp_cache_msync(map, 16 * PG, ESP_CACHE_MSYNC_FLAG_DIR_M2C);   // (nothing of the start of PSRAM kept for it)
+  uint8_t* p = (uint8_t*)map;
+  memset(p + PG, fill, PG);
+  esp_cache_msync(p + PG, PG, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+  for (int i = 2; i < 16; i++)   // (a check: the other 14 pages show it)
+    if (p[i * PG] != fill || p[i * PG + PG - 1] != fill) abort();
+  return p;
+}
 uint32_t t386_sync_calls, t386_sync_cycles;   // (serial "S")
 // New code, written through the L1 data cache, for the instruction fetch: the L1 data cache's lines written back to
 // the L2 cache (which both share), then the L1 instruction caches' lines dropped. (esp_cache_msync on PSRAM also wrote

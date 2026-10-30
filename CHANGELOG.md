@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- The translator's code cache takes the PSRAM free when the PC starts, less 1.5 MB kept for Wi-Fi, uploads and
+  disks: 3 to 8 MB instead of 3 MB (about 5.5 MB for a PC with 16 MB of RAM), with a block in its tables per 256
+  bytes of it. Programs with a lot of code empty it less often: a graphical desktop's applications start 15 to 20%
+  faster (programs whose code fitted in 3 MB run as before, within 1%). Room for it: M5GFX's second frame buffer, which the panel never shows, is given back (1.8 MB); the
+  settings panel draws with one buffer instead of two (it waited for each anyway); the translator's page map takes
+  128 KB instead of 1 MB (the MMU maps its part for addresses above 256 MB, all "not RAM", onto one shared
+  page).
+
 ## 1.2.1 (2026-10-28)
 
 The empty card's settings panel with the Machine frame alone, and README updates. The firmware image with its

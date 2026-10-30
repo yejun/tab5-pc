@@ -25,6 +25,11 @@
 //   void *t386_jit_alloc(size_t)                 zeroed memory, executable (the code cache) and writable; NULL if none
 //   void t386_jit_sync(void *p, size_t n)        make code written at p executable (caches)
 //   T386_JIT_CACHE_SIZE                          bytes of code cache
+//   size_t T386_JIT_ROOM(void), T386_JIT_CACHE_MAX  (optional) the bytes all of the translator's memory may take when it
+//                                                starts: the code cache gets what its tables leave of them, at least
+//                                                T386_JIT_CACHE_SIZE and at most T386_JIT_CACHE_MAX
+//   u8 *T386_JIT_PAGEMAP(u8 fill)                (optional) the pagemap's 1 MB, its bytes from JIT_MAP_OWN on (pages
+//                                                past 256 MB) holding fill and never written; NULL if none
 
 bool t386_jit_enabled = true;   // (serial "jit 0|1" on the Tab5: the fast path alone, for comparing)
 
@@ -508,14 +513,18 @@ typedef struct JitBlock {
 	JitLink *links;
 } JitBlock;
 
-#define JIT_HASH 16384   // (in PSRAM: the blocks are, and a chain walked is a cache miss a block)
-#define JIT_MAX_BLOCKS 16384
+#define JIT_HASH 32768   // (in PSRAM: the blocks are, and a chain walked is a cache miss a block)
+#define JIT_MIN_BLOCKS 16384
+#define JIT_CACHE_PER_BLOCK 256   // a block in the table per this many bytes of code cache (beyond JIT_MIN_BLOCKS:
+                                  // blocks take 240 (Linux) to 400 bytes of code)
+static int jit_max_blocks;            // (jit_init)
 static JitBlock **jit_hash;           // [JIT_HASH]
-static JitBlock *jit_blocks;          // [JIT_MAX_BLOCKS]
+static JitBlock *jit_blocks;          // [jit_max_blocks]
 static int jit_nblocks;
-static JitLink *jit_links;            // [JIT_MAX_BLOCKS * 2]
+static JitLink *jit_links;            // [jit_max_blocks * 2]
 static int jit_nlinks;
 static u32 *jit_cache, *jit_cache_end, *jit_cache_free;
+static size_t jit_cache_size;
 static u32 *jit_cache_base;           // after the code made at the start (shared routines): blocks from here
 static JitBlock **jit_page_blocks;    // per 4 KB page of RAM: the blocks translated from there
 // Per 256 bytes of RAM: the blocks that start there. A write finds the blocks it hits in the few buckets from
@@ -583,6 +592,7 @@ static CPUI386 *jit_cpu;
 // (loads: if it is >= 0). PM_SLOW (the sign bit) sends both to the slow path: on its own, for RAM pages just before
 // MMIO or the end of RAM (where an access of 2 or 4 bytes may run on into them); with PM_NOT_RAM, for those.
 enum { PM_RAM = 0, PM_CODE = 1, PM_CODE_NEXT = 2, PM_NOT_RAM = 0x40, PM_SLOW = 0x80, PM_IO = PM_SLOW | PM_NOT_RAM };
+#define JIT_MAP_OWN (1u << 16)   // pages that can be RAM (256 MB): beyond, PM_IO alone (see T386_JIT_PAGEMAP)
 static inline bool pm_io(uword p) { return (t386_pagemap[p] & PM_IO) == PM_IO; }
 
 static inline unsigned jit_hash_of(uword lin) { return (lin ^ (lin >> 14)) & (JIT_HASH - 1); }
@@ -780,6 +790,30 @@ static u32 *jit_r_tlb[2][3], *jit_r_tlbs[6][2][3];   // (jit_r_tlbs: the segment
 static u32 *jit_t_prd[3], *jit_t_pwr[2][3], *jit_t_prmw[3], *jit_t_leave, *jit_t_leave_f;   // (trampolines: jit_tramp)
 static u32 *jit_t_exit[5];   // leave with a reason, the x86 address in the word after the call (jt_exit)
 
+#ifndef T386_JIT_CACHE_MAX
+#define T386_JIT_CACHE_MAX T386_JIT_CACHE_SIZE
+#endif
+// The code cache's size (in bytes, a multiple of 64 KB): T386_JIT_CACHE_SIZE, or with T386_JIT_ROOM what the room left
+// by the tables holds, a JitBlock and two JitLinks in the table for each JIT_CACHE_PER_BLOCK bytes of code (the
+// pagemap among the tables unless map_made)
+static size_t jit_cache_bytes(bool map_made)
+{
+#ifdef T386_JIT_ROOM
+	const size_t room = T386_JIT_ROOM();
+	const size_t tables = sizeof(JitBlock *) * (JIT_HASH + jit_pages + (jit_pages << (12 - JIT_BUCKET_SHIFT))) +
+			      (map_made ? 0 : 1 << 20) + jit_pages * 8 + sizeof(*jit_smc) * JIT_SMC +
+			      sizeof(*jit_dynimm) * JIT_DYNIMM + 8192;
+	const size_t per = JIT_CACHE_PER_BLOCK + sizeof(JitBlock) + 2 * sizeof(JitLink);
+	size_t n = room > tables ? (room - tables) / per * JIT_CACHE_PER_BLOCK & ~(size_t) 0xffff : 0;
+	if (n < T386_JIT_CACHE_SIZE) n = T386_JIT_CACHE_SIZE;
+	if (n > T386_JIT_CACHE_MAX) n = T386_JIT_CACHE_MAX;
+	return n;
+#else
+	(void) map_made;
+	return T386_JIT_CACHE_SIZE;
+#endif
+}
+
 static bool jit_init(CPUI386 *cpu)
 {
 	if (jit_ready) return true;
@@ -788,28 +822,40 @@ static bool jit_init(CPUI386 *cpu)
 #endif
 	jit_cpu = cpu;
 	jit_pages = cpu->phys_mem_size >> 12;
-	jit_cache = (u32 *) t386_jit_alloc(T386_JIT_CACHE_SIZE);
-	jit_blocks = (JitBlock *) t386_jit_alloc(sizeof(JitBlock) * JIT_MAX_BLOCKS);
+	// the pagemap first (the platform's: the room left for the rest is measured after it)
+	uword map_n = 1u << 20;   // (its bytes to set)
+	u8 *map = NULL;
+#ifdef T386_JIT_PAGEMAP
+	if ((map = T386_JIT_PAGEMAP(PM_IO)))
+		map_n = JIT_MAP_OWN;
+#endif
+	jit_cache_size = jit_cache_bytes(map != NULL);
+	if (!map) map = (u8 *) t386_jit_alloc(1 << 20);
+	jit_max_blocks = jit_cache_size / JIT_CACHE_PER_BLOCK > JIT_MIN_BLOCKS ? jit_cache_size / JIT_CACHE_PER_BLOCK
+									       : JIT_MIN_BLOCKS;
+	jit_blocks = (JitBlock *) t386_jit_alloc(sizeof(JitBlock) * jit_max_blocks);
 	jit_hash = (JitBlock **) t386_jit_alloc(sizeof(JitBlock *) * JIT_HASH);
-	jit_links = (JitLink *) t386_jit_alloc(sizeof(JitLink) * JIT_MAX_BLOCKS * 2);
+	jit_links = (JitLink *) t386_jit_alloc(sizeof(JitLink) * jit_max_blocks * 2);
 	jit_page_blocks = (JitBlock **) t386_jit_alloc(sizeof(JitBlock *) * jit_pages);
 	jit_buckets = (JitBlock **) t386_jit_alloc(sizeof(JitBlock *) * (jit_pages << (12 - JIT_BUCKET_SHIFT)));
-	u8 *map = (u8 *) t386_jit_alloc(1 << 20);
 	jit_codelines = (u8 *) t386_jit_alloc(jit_pages * 8);
 	jit_smc = (struct JitSmc *) t386_jit_alloc(sizeof(*jit_smc) * JIT_SMC);
 	jit_dynimm = (struct JitDynimm *) t386_jit_alloc(sizeof(*jit_dynimm) * JIT_DYNIMM);
 	jit_heat = (u8 *) t386_jit_alloc(8192);
+	// the cache last, in what the tables left (smaller if no piece of memory is that big)
+	while (!(jit_cache = (u32 *) t386_jit_alloc(jit_cache_size)) && jit_cache_size > T386_JIT_CACHE_SIZE)
+		jit_cache_size -= 1 << 18;
 	if (!jit_cache || !jit_blocks || !jit_hash || !jit_links || !jit_page_blocks || !jit_buckets || !map || !jit_codelines ||
 	    !jit_smc || !jit_dynimm || !jit_heat) {
 		fprintf(stderr, "jit: no memory, not used\n");
 		t386_jit_enabled = false;
 		return false;
 	}
-	jit_cache_end = jit_cache + T386_JIT_CACHE_SIZE / 4;
+	jit_cache_end = jit_cache + jit_cache_size / 4;
 	// not RAM: beyond it, and the VGA window (tiny386 keeps its own data in that part of the RAM array)
-	for (uword p = 0; p < (1u << 20); p++)
+	for (uword p = 0; p < map_n; p++)
 		map[p] = p >= jit_pages || (p >= 0xa0 && p < 0xc0) ? PM_IO : PM_RAM;
-	for (uword p = 0; p + 1 < (1u << 20); p++)   // the RAM page before VGA memory, and the last one
+	for (uword p = 0; p + 1 < (1u << 20) && p < map_n; p++)   // the RAM page before VGA memory, and the last one
 		if (map[p] == PM_RAM && map[p + 1] == PM_IO) map[p] = PM_SLOW;
 	t386_pagemap = map;
 	jp = jit_cache;
@@ -5067,7 +5113,7 @@ static JitBlock *jit_translate_n(CPUI386 *cpu, uword eip, uword lin, u8 mode, in
 	}
 	// pass 3: emit
 	if (!jt_stubs && !(jt_stubs = (JStub *) t386_jit_alloc(sizeof(JStub) * JIT_MAX_STUBS))) return NULL;
-	if (jit_nblocks == JIT_MAX_BLOCKS || jit_cache_end - jit_cache_free < 4096 + (JIT_RT_MAX + JIT_X87_POOL) / 4) jit_flush();
+	if (jit_nblocks == jit_max_blocks || jit_cache_end - jit_cache_free < 4096 + (JIT_RT_MAX + JIT_X87_POOL) / 4) jit_flush();
 	jp = jit_cache_free;
 	jlimit = jit_cache_end;
 	joverflow = false;
@@ -5341,7 +5387,8 @@ void t386_fpu_report(char *buf, int len)
 // serial "jit": what the translator has been doing
 void t386_jit_report(char *buf, int len)
 {
-	snprintf(buf, len, "jit %s: %ld blocks entered, %ld translated (%d now, %u KB of code), %ld invalidated, %u cache "
+	snprintf(buf, len, "jit %s: %ld blocks entered, %ld translated (%d now, %u KB of code; room for %d, %u KB), %ld "
+		 "invalidated, %u cache "
 		 "emptyings, %ld links, %ld instructions to the interpreter between blocks, %.1f instructions per block, "
 		 "%.0f bytes of code per instruction; exits: %ld jump, %ld link, %ld interp, %ld budget, %ld stop; "
 		 "%ld runs of self-modifying code (the last at %08x); %u TLB flushes; interpreted instructions left blocks "
@@ -5349,7 +5396,8 @@ void t386_jit_report(char *buf, int len)
 		 "CALL %ld JMP %ld RETF %ld IRET %ld INT; %ld x87 instructions; %ld block lookups (%ld found), %.1f blocks looked at each",
 		 t386_jit_enabled ? "on" : "off",
 		 jit_stat_blocks, jit_stat_translated, jit_nblocks,
-		 jit_cache ? (unsigned) ((jit_cache_free - jit_cache) * 4 / 1024) : 0, jit_stat_invalidated,
+		 jit_cache ? (unsigned) ((jit_cache_free - jit_cache) * 4 / 1024) : 0, jit_max_blocks,
+		 (unsigned) (jit_cache_size / 1024), jit_stat_invalidated,
 		 jit_generation, jit_stat_links, jit_stat_interp, jit_stat_translated ? (double) jit_stat_ins / jit_stat_translated : 0.0,
 		 jit_stat_ins ? (double) jit_stat_bytes / jit_stat_ins : 0.0, jit_stat_exit[0], jit_stat_exit[1],
 		 jit_stat_exit[2], jit_stat_exit[3], jit_stat_exit[4], jit_stat_volatile, jit_last_volatile, ftlb_flushes,
@@ -5402,7 +5450,7 @@ static u32 jit_code_sum(const JitBlock *b)
 }
 static void jit_sum_set(JitBlock *b)
 {
-	if (!jit_sums) jit_sums = (u32 *) t386_jit_alloc(sizeof(u32) * JIT_MAX_BLOCKS);
+	if (!jit_sums) jit_sums = (u32 *) t386_jit_alloc(sizeof(u32) * jit_max_blocks);
 	if (jit_sums && b) jit_sums[b - jit_blocks] = jit_code_sum(b);
 }
 static void jit_sum_of(const u32 *p) { jit_sum_set(jit_block_of(p)); }   // (a jump patched at p)
@@ -5571,7 +5619,7 @@ static bool jit_exec_in(CPUI386 *cpu, int stepcount)
 				if (t && t->crossing && !jit_crossing_ok(cpu, t)) t = NULL;
 				u32 *dest = t && (other_page || t->crossing) && linkable && gen == jit_generation
 					    ? jit_xentry(t) : t ? t->code : NULL;
-				if (dest && linkable && gen == jit_generation && jit_nlinks < JIT_MAX_BLOCKS * 2) {
+				if (dest && linkable && gen == jit_generation && jit_nlinks < jit_max_blocks * 2) {
 					JitLink *l = &jit_links[jit_nlinks++];
 					l->slot = jit_link_slot;
 					l->next = t->links;

@@ -973,6 +973,19 @@ static void load_config(PCConfig& conf, bool have_sd) {
                 conf.fdd[0] ?: "-", conf.fdd[1] ?: "-");
 }
 
+// M5GFX makes the panel with two frame buffers and uses the first alone. The panel shows the first unless
+// esp_lcd_panel_draw_bitmap is given a pointer into the second, which nothing here does: the second (1.8 MB of PSRAM)
+// is given back to the heap, for the translator's code. (The driver keeps its address; the panel is never deleted.)
+struct PanelDsiHandle : lgfx::Panel_DSI {
+  static constexpr esp_lcd_panel_handle_t lgfx::Panel_DSI::*handle = &PanelDsiHandle::_disp_panel_handle;
+};
+static void panel_free_second_fb(lgfx::Panel_DSI* panel) {
+  esp_lcd_panel_handle_t h = panel->*PanelDsiHandle::handle;
+  void *fb0 = nullptr, *fb1 = nullptr;
+  if (h && esp_lcd_dpi_panel_get_frame_buffer(h, 2, &fb0, &fb1) == ESP_OK && fb0 == g_panel_fb && fb1 && fb1 != fb0)
+    heap_caps_free(fb1);
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.setTxTimeoutMs(0);
@@ -994,6 +1007,7 @@ void setup() {
 
   auto* panel = static_cast<lgfx::Panel_DSI*>(M5.Display.getPanel());
   g_panel_fb = panel ? (uint16_t*)panel->config_detail().buffer : nullptr;
+  if (panel) panel_free_second_fb(panel);
   g_emu_fb = (uint16_t*)heap_caps_aligned_calloc(128, 1, (size_t)EMU_W * EMU_H * 2, MALLOC_CAP_SPIRAM);
   ppa_client_config_t pc = {};
   pc.oper_type = PPA_OPERATION_SRM;
