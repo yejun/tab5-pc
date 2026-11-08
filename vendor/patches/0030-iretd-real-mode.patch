@@ -1,0 +1,34 @@
+IRET with a 32-bit operand (IRETD) in real mode, or in virtual-8086 mode with IOPL 3, stopped the emulator
+(cpu_abort -201). A DOS debugger returns this way to the program it traces or runs, and to DOS when it quits. Now
+EIP, CS and EFLAGS are popped as QEMU's real-mode IRET does: VM stays, and in virtual-8086 mode IOPL too.
+
+diff --git a/i386.c b/i386.c
+--- a/i386.c
++++ b/i386.c
+@@ -2386,8 +2386,25 @@
+ #define IRET() \
+ 	if ((cpu->cr0 & 1) && (!(cpu->flags & VM) || get_IOPL(cpu) < 3)) { \
+ 		TRY(pmret(cpu, opsz16, 0, true)); \
++	} else if (!opsz16) { \
++		/* 32 bits: EIP, CS, EFLAGS; VM stays, and IOPL in V86 mode, as QEMU */ \
++		OptAddr meml1, meml2, meml3; \
++		uword sp = lreg32(4); \
++		/* eip */ TRY(translate32(cpu, &meml1, 1, SEG_SS, sp & sp_mask)); \
++		uword newip = laddr32(&meml1); \
++		/* cs */ TRY(translate32(cpu, &meml2, 1, SEG_SS, (sp + 4) & sp_mask)); \
++		int newcs = laddr32(&meml2) & 0xffff; \
++		/* eflags */ TRY(translate32(cpu, &meml3, 1, SEG_SS, (sp + 8) & sp_mask)); \
++		uword oldflags = cpu->flags; \
++		uword keep = (cpu->flags & VM) ? VM | IOPL : VM; \
++		cpu->flags = (cpu->flags & keep) | (laddr32(&meml3) & ~keep); \
++		cpu->flags &= EFLAGS_MASK; \
++		cpu->flags |= 0x2; \
++		if (!set_seg(cpu, SEG_CS, newcs)) { cpu->flags = oldflags; return false; } \
++		cpu->cc.mask = 0; \
++		set_sp(sp + 12, sp_mask); \
++		cpu->next_ip = newip; \
+ 	} else { \
+-		if (!opsz16) cpu_abort(cpu, -201); \
+ 		OptAddr meml1, meml2, meml3; \
+ 		uword sp = lreg32(4); \
+ 		/* ip */ TRY(translate16(cpu, &meml1, 1, SEG_SS, sp & sp_mask)); \

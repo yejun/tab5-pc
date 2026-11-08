@@ -2739,7 +2739,7 @@ static int jit_h_popf(CPUI386 *cpu, uword v, int n)
 	cpu->flags &= cpu->flags_mask;
 	cpu->flags |= 0x2;
 	cpu->cc.mask = 0;
-	return (cpu->intr && (cpu->flags & IF)) || (cpu->flags & IOPL) != iopl;
+	return FAST_STOP_DUE(cpu) || (cpu->flags & IOPL) != iopl;
 }
 // RDTSC: tiny386's time stamp, the high half in jit_tsc_hi
 static u32 jit_tsc_hi;
@@ -3147,7 +3147,7 @@ static int jit_after(CPUI386 *cpu, const struct JitBefore *b, bool ok, uword nex
 		jit_interp_reason = EXIT_STOP;
 		return 1;
 	}
-	if (cpu->halt || (cpu->intr && (cpu->flags & IF))) {
+	if (cpu->halt || FAST_STOP_DUE(cpu)) {
 		jit_interp_reason = EXIT_STOP;
 		return 1;
 	}
@@ -5962,10 +5962,14 @@ static JIT_SMALL void jt_emit(const JIns *in)
 		else e_addi(jg[4], jg[4], 6);
 		jt_seg_load(SEG_CS, A3);
 		e_lw(T6, R_CPU, CPU_OFF(flags));
+		e_andi(T6, T6, TF);
+		u32 *tf = e_branch(BNE, T6, X0);   // (the trap flag: single steps, from the dispatcher)
+		e_lw(T6, R_CPU, CPU_OFF(flags));
 		e_andi(T6, T6, IF);
 		u32 *no = e_branch(BEQ, T6, X0);
 		e_lbu(T6, R_CPU, CPU_OFF(intr));
 		u32 *none = e_branch(BEQ, T6, X0);
+		j_bind(tf, jp);
 		e_li(A0, EXIT_STOP);   // (a1: the next eip)
 		{
 			u32 t = (u32) (uintptr_t) t386_jit_exit;
@@ -6959,7 +6963,7 @@ static bool jit_exec_in(CPUI386 *cpu, int stepcount)
 			bool ok = fast_exec(cpu, interp);
 			budget -= interp;
 			if (!ok) return false;
-			if (cpu->halt || (cpu->intr && (cpu->flags & IF))) return true;
+			if (cpu->halt || FAST_STOP_DUE(cpu)) return true;
 		}
 	}
 	return true;

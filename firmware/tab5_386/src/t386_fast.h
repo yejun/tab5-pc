@@ -26,6 +26,10 @@
 #define T386_FAST_PD   // pre-decoded blocks (t386_fast_pd.h)
 #endif
 
+// A run of instructions stops here: an interrupt is due, or the trap flag is set (single steps: cpui386_step, which
+// runs one instruction and then raises the debug trap)
+#define FAST_STOP_DUE(cpu) (((cpu)->intr && ((cpu)->flags & IF)) || ((cpu)->flags & TF))
+
 typedef u16 __attribute__((may_alias)) u16a;
 typedef u32 __attribute__((may_alias)) u32a;
 
@@ -547,7 +551,7 @@ static bool T386_FAST_IRAM __attribute__((optimize("O3", "reorder-blocks-algorit
 	pd_ep++, pd_stat_ep[3]++;   // (devices may have written code since the last time)
 	// (back from pd_classic: the steps it had; and whether blocks may go on, as the fast path would)
 #define PD_UNCALL do { if (pd_call) { pd_call = false; steps += pd_saved; } } while (0)
-#define PD_GO_ON (!cpu->halt && (cpu->flags & VM) == vm0 && !(cpu->intr && (cpu->flags & IF)))
+#define PD_GO_ON (!cpu->halt && (cpu->flags & VM) == vm0 && !FAST_STOP_DUE(cpu))
 #define PD_ENTER do { if (pd_on) goto pd_enter; } while (0)
 #define PD_JUMPED do { if (pd_on) goto pd_jumped; } while (0)
 #else
@@ -637,7 +641,7 @@ static bool T386_FAST_IRAM __attribute__((optimize("O3", "reorder-blocks-algorit
 		if (!(call)) goto fault; \
 		ftlb_check(cpu); \
 		eip = cpu->next_ip; \
-		if ((cpu->flags & VM) != vm0 || (cpu->intr && (cpu->flags & IF))) { goto out_ip; } \
+		if ((cpu->flags & VM) != vm0 || FAST_STOP_DUE(cpu)) { goto out_ip; } \
 		RELOAD; \
 	} while (0)
 
@@ -779,7 +783,7 @@ slow_eip:
 		ftlb_check(cpu);   // (tiny386 may have emptied its TLB: ours follows)
 	}
 	// cpu_exec1 counted it: into nslow only with its step, or FAST_COUNT leaves it out twice when stopping here
-	if (cpu->halt || (cpu->flags & VM) != vm0 || (cpu->intr && (cpu->flags & IF)) || (nslow++, --steps < 0)) {
+	if (cpu->halt || (cpu->flags & VM) != vm0 || FAST_STOP_DUE(cpu) || (nslow++, --steps < 0)) {
 #ifdef T386_FAST_PD
 		if (pd_call) {   // (pd_classic's instruction, by tiny386)
 			PD_UNCALL;
@@ -862,10 +866,12 @@ void cpui386_step(CPUI386 *cpu, int stepcount)
 		return;
 	}
 
+	// the trap flag (a debugger's single steps): one instruction, by the fast path or tiny386, then the debug trap
+	const bool tf = cpu->flags & TF;
 #ifdef T386_JIT
-	int ret = jit_exec(cpu, stepcount);
+	int ret = tf ? fast_exec(cpu, 1) : jit_exec(cpu, stepcount);
 #else
-	int ret = fast_exec(cpu, stepcount);
+	int ret = fast_exec(cpu, tf ? 1 : stepcount);
 #endif
 	cpu->ifetch.paddr = 0;
 	if (!ret) {
@@ -879,6 +885,10 @@ void cpui386_step(CPUI386 *cpu, int stepcount)
 		
 
 		fast_deliver(cpu, cpu->excno, pusherr);
+	} else if (tf) {   // a trap after the instruction, as QEMU's: vector 1, DR6's BS set, the next instruction pushed
+		cpu->dr[6] |= 0x4000;
+		cpu->ip = cpu->next_ip;
+		fast_deliver(cpu, EX_DB, false);
 	}
 }
 

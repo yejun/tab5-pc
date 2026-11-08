@@ -366,7 +366,7 @@ FL(op_popf): {
 	cpu->flags &= EFLAGS_MASK;
 	cpu->flags |= 0x2;
 	cpu->cc.mask = 0;
-	if (cpu->intr && (cpu->flags & IF)) {   // as tiny386: the interrupt now
+	if (FAST_STOP_DUE(cpu)) {   // as tiny386: the interrupt now (or the trap flag: single steps)
 		goto out;
 	}
 	NEXT; }
@@ -576,7 +576,7 @@ FL(op_iret): {   // in protected mode by tiny386's pmret; in real mode, 16-bit
 	LOAD_CS(sel);
 	cpu->cc.mask = 0;
 	SP_ADD(6);
-	if (cpu->intr && (cpu->flags & IF)) {   // as tiny386: the interrupt now
+	if (FAST_STOP_DUE(cpu)) {   // as tiny386: the interrupt now (or the trap flag: single steps)
 		cpu->next_ip = eip;
 		goto out_ip;
 	}

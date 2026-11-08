@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Fixed: a DOS debugger's quit, go and trace commands restarted the Tab5 (an IRET with a 32-bit operand outside
+  protected mode stopped the emulator); now handled as QEMU does (`vendor/patches/0030`).
+- The trap flag works: a debugger's trace runs one instruction at a time (tiny386 had no single-step trap).
+- Fixed: a word read from port 40h (the timer) returned FFFF; it now reads 40h and 41h, as the ISA bus splits it
+  (pull request #2 by canardleteer).
+
 ## 1.6.0 (2026-11-08)
 
 Faster DOS programs (more instructions translated, text-mode video memory through the fast paths), faster disks
