@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 1.6.0 (2026-11-08)
+
+Faster DOS programs (more instructions translated, text-mode video memory through the fast paths), faster disks
+(bus-master DMA, write gathering, read-ahead), the FPU reported by the BIOS, a 486 with CPUID, and Wi-Fi that stays
+as you left it. The firmware image with its notices and corresponding source, as for 1.5.0.
 
 - Fixed: after the translator's code cache was emptied, newly translated read-modify-write instructions in pages
   with translated code could call a helper at a place later overwritten (a crash or wrong results after long runs).
@@ -81,6 +85,9 @@
 - Blinking text (attribute bit 7) blinks, at half the cursor's rate.
 - Timings measured against 1.5.0 on the Tab5 show no change beyond run-to-run noise (~1-3%): two games' timed
   demos, a graphical desktop's start and two of its programs, Sprig Linux's start and a file-listing workload.
+- Built with the M5Stack board package m5stack:esp32 3.3.10, M5Unified 0.2.29 and M5GFX 0.3.0 (before: 3.3.9, 0.2.26,
+  0.2.36). The licenses in the repository now include the LGPL 3.0 (with the GPL 3.0) for patch 0027's change to
+  tiny386's SeaBIOS patch.
 
 ## 1.5.0 (2026-11-05)
 

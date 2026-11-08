@@ -16,7 +16,7 @@ GitHub release page together with:
 2. **`tab5-pc-<version>-source.tar.gz`**: the corresponding source: this repository at the release tag; tiny386 and
    ESP-Hosted as fetched and patched (FMOPL among them); the BIOS images and SeaBIOS's source at the pinned commit with
    tiny386's patch and config; the Arduino core's source as built (the board package's `cores/` and `libraries/`,
-   m5stack:esp32 3.3.9). M5Unified, M5GFX and LVGL (MIT) are named by version.
+   m5stack:esp32 3.3.10). M5Unified, M5GFX and LVGL (MIT) are named by version.
 3. **The rebuild route** for the LGPL parts: the README's "Build and flash" with the versions above. Change
    `vendor/tiny386/fmopl.c`, SeaBIOS (`tools/build_seabios.sh`) or the board package's core, rebuild, flash.
    ESP-IDF's libraries come precompiled in the board package (ESP-IDF v5.5.4, Apache-2.0 and the component licenses

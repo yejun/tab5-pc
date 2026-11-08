@@ -19,7 +19,7 @@ To build the firmware:
 
 - [Arduino CLI](https://arduino.github.io/arduino-cli/) with the M5Stack board package (`m5stack:esp32`, from
   `https://static-cdn.m5stack.com/resource/arduino/package_m5stack_index.json`) and the libraries M5Unified, M5GFX
-  and lvgl. Built and tested with m5stack:esp32 3.3.9, M5Unified 0.2.26, M5GFX 0.2.36 and lvgl 9.6.0.
+  and lvgl. Built and tested with m5stack:esp32 3.3.10, M5Unified 0.2.29, M5GFX 0.3.0 and lvgl 9.6.0.
 - git, curl, make, tar with xz, a C compiler, `xxd`, and the GitHub CLI (`gh`, logged in: `gh auth login`) for
   tiny386's BIOS images.
 - Python 3: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`. Run the tools with
@@ -33,7 +33,7 @@ Each [release](https://github.com/yejun/tab5-pc/releases) has the firmware as on
 (`tab5-pc-<version>-prev3.bin`, for the Tab5's ESP32-P4, revision v1.x), with its licenses and notices and the
 corresponding source. Releases have no image for ESP32-P4 v3.x while no Tab5 with that chip is out (see below to build
 one). It is also in M5Burner. To write it yourself:
-`esptool --chip esp32p4 write-flash 0x0 tab5-pc-1.5.0-prev3.bin`.
+`esptool --chip esp32p4 write-flash 0x0 tab5-pc-1.6.0-prev3.bin`.
 
 ## Build and flash
 
@@ -160,7 +160,7 @@ speaker.
 
 ## Copying files over Wi-Fi
 
-Wi-Fi is off while the PC runs. Open the settings panel (swipe down from the top edge, Sym + Esc, or Scroll Lock)
+Wi-Fi is off until you switch it on. Open the settings panel (swipe down from the top edge, Sym + Esc, or Scroll Lock)
 and switch on **Copy files over Wi-Fi**. The Tab5 joins your network and shows its address, e.g. `http://192.168.1.50/`.
 Open it in a browser:
 
@@ -178,7 +178,8 @@ Open it in a browser:
 - From a shell: `.venv/bin/python tools/upload.py <address> hdb /APPS ~/dos/myprog`, then
   `.venv/bin/python tools/upload.py <address> --done`.
 
-Switch Wi-Fi off again when you are done. It is off after every restart, except one the page asks for.
+Switch Wi-Fi off again when you are done. The Tab5 keeps the choice: after a restart or a power-off, Wi-Fi comes
+back on or stays off as you last left it.
 
 > **The file manager has no password.** Anyone who can reach the Tab5 on the network can read, change and delete
 > everything on the card and the PC's disks while it is on. Switch it on only on a network you trust, and never make
