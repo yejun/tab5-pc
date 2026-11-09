@@ -5,7 +5,7 @@ PS/2 keyboard and mouse, a Sound Blaster 16, AdLib and PC speaker, IDE hard disk
 SeaBIOS. It runs DOS and Linux. On an empty SD card it downloads and installs FreeDOS or
 [Sprig Linux](https://github.com/yejun/sprig-linux) by itself; files are copied to it over Wi-Fi from a browser.
 
-![Sprig Linux starting on the Tab5, between the side panels](docs/images/linux-boot.png)
+![Sprig Linux starting on the Tab5, between the side panels in their holiday look](docs/images/linux-boot.png)
 
 This is an independent project, not affiliated with or endorsed by M5Stack. It is provided as is (see `LICENSE`).
 
