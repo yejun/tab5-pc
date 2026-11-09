@@ -869,6 +869,7 @@ static void display_task(void*) {
   bool stopped_shown = false, off_shown = false, paused_shown = false;
   // the PC's picture onto the panel where it changed (native modes by their changed lines, others by bands)
   auto refresh = [&](int64_t now) {
+    if (g_shot_hold) return;   // (a screenshot is being saved from the picture: screenshot.h)
 #if T386_JIT_HOLD == 2
     JitHold whole;   // (the whole refresh, its PSRAM writes too)
 #endif

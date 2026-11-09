@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fixed: a screenshot of Sprig Linux's 800 x 600 console often wasn't saved: the copy of the picture (960 KB) and
+  the PNG writer's memory (~200 KB) didn't both fit beside the PC. When they don't, the PC's picture now holds still
+  on the screen for a moment (~330 ms) while the PNG is made from it, the PC running on; with room, as before.
 - The side panels dress for the holidays from November 15 to January 6 (the local date, once the Tab5's clock has
   been set): thin snow caps on the keys and windows with icicles and flakes, a pine garland with baubles along the
   top, presents and a snowman at the bottom, the power and disk lights hung as baubles, a Santa hat on the camera and

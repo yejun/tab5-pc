@@ -6,6 +6,9 @@
 //   SHOT_FLASH_MS), then the camera's light shows green (saved) or red (not) for 2 s. (A white flash over the PC's
 //   picture too, up to 2026-11-05: it needed a 1.4 MB copy of it, which often wasn't free beside the PC.)
 //   The day comes from the Tab5's clock, in its time zone (clock.h): without a date the name is undated_001.png.
+//   When the copy and the PNG's compressor don't both fit in the PSRAM left beside the PC (an 800 x 600 picture's
+//   copy is 960 KB, the PNG writer's ~200 KB; Sprig Linux leaves ~1.1 MB), there is no copy: the PC's picture holds
+//   still on the panel (g_shot_hold: the display task doesn't draw it) while it is saved from where it is drawn.
 #pragma once
 #include <dirent.h>
 #include <sys/stat.h>
@@ -17,8 +20,10 @@ static volatile int g_shot_state = SHOT_IDLE;
 static volatile int64_t g_shot_done_ms = 0;   // when SAVED / FAILED began (shown SHOT_SHOW_MS)
 static constexpr int64_t SHOT_SHOW_MS = 2000, SHOT_FLASH_MS = 350;
 static int64_t g_shot_start_ms = 0;          // when the picture was taken (the camera's flash: SHOT_FLASH_MS)
-static uint16_t* g_shot_px = nullptr;         // the copy being saved (RGB565, w x h)
-static int g_shot_w, g_shot_h;
+static uint16_t* g_shot_px = nullptr;         // the copy being saved (RGB565, w x h), or none:
+static volatile bool g_shot_hold = false;     // the PC's picture held still, saved from where it is drawn
+static const uint16_t* g_shot_src;            // what is saved: the copy, or the picture (g_shot_stride pixels a row)
+static int g_shot_w, g_shot_h, g_shot_stride;
 static char g_shot_path[64];
 static size_t g_shot_bytes;
 static TaskHandle_t g_shot_task = nullptr;
@@ -101,7 +106,7 @@ static mz_bool png_put(const void* p, int len, void* user) {   // deflate's outp
   return o.ok;
 }
 
-// g_shot_px (w x h) as a PNG at path; false if it couldn't be (the file removed then)
+// g_shot_src (w x h) as a PNG at path; false if it couldn't be (the file removed then)
 static bool png_write(const char* path, int w, int h) {
   PngOut o = {fopen(path, "wb"), (uint8_t*)heap_caps_malloc(PNG_CHUNK, MALLOC_CAP_SPIRAM), 0, true, 8};
   uint8_t* row = (uint8_t*)heap_caps_malloc((size_t)w * 3 + 1, MALLOC_CAP_SPIRAM);
@@ -117,7 +122,7 @@ static bool png_write(const char* path, int w, int h) {
     // 32 probes: miniz's level 3 (as small as level 6 for a PC's flat colours, in about half the time)
     o.ok = o.ok && tdefl_init(z, png_put, &o, 32 | TDEFL_WRITE_ZLIB_HEADER) == TDEFL_STATUS_OKAY;
     for (int y = 0; y < h && o.ok; ++y) {
-      const uint16_t* src = g_shot_px + (size_t)y * w;
+      const uint16_t* src = g_shot_src + (size_t)y * g_shot_stride;
       row[0] = 0;   // (filter: none)
       for (int x = 0; x < w; ++x) {
         const uint16_t px = src[x];
@@ -145,14 +150,18 @@ static void shot_task(void*) {
   const int64_t t0 = esp_timer_get_time();
   const bool named = shot_next_path(g_shot_path, sizeof(g_shot_path));
   const bool ok = named && png_write(g_shot_path, g_shot_w, g_shot_h);
+  const bool held = !g_shot_px;
   heap_caps_free(g_shot_px);
   g_shot_px = nullptr;
+  g_shot_hold = false;
   if (ok)
-    Serial.printf("shot: %s, %d x %d, %u bytes, %lld ms\n", g_shot_path, g_shot_w, g_shot_h, (unsigned)g_shot_bytes,
-                  (esp_timer_get_time() - t0) / 1000);
+    Serial.printf("shot: %s, %d x %d, %u bytes, %lld ms%s\n", g_shot_path, g_shot_w, g_shot_h, (unsigned)g_shot_bytes,
+                  (esp_timer_get_time() - t0) / 1000, held ? " (the picture held still: no room for a copy)" : "");
   else
-    Serial.printf("shot: not saved (%s; PSRAM %u free)\n", named ? "the card full or missing, or no memory" : "no folder",
-                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    Serial.printf("shot: not saved (%s; PSRAM %u free, largest block %u)\n",
+                  named ? "the card full or missing, or no memory" : "no folder",
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
   g_shot_done_ms = esp_timer_get_time() / 1000;
   g_shot_state = ok ? SHOT_SAVED : SHOT_FAILED;
   g_shot_task = nullptr;
@@ -168,14 +177,19 @@ static void shot_start(int64_t now_ms) {
     Serial.println("shot: no picture");
     return;
   }
-  g_shot_px = (uint16_t*)heap_caps_malloc((size_t)w * h * 2, MALLOC_CAP_SPIRAM);
-  if (!g_shot_px) {
-    Serial.println("shot: not enough memory");
-    g_shot_done_ms = now_ms;
-    g_shot_state = SHOT_FAILED;
-    return;
+  // a copy only if the PNG writer's memory is left beside it (its compressor, a chunk, a row, and some to spare)
+  const size_t copy = (size_t)w * h * 2, png = sizeof(tdefl_compressor) + PNG_CHUNK + (size_t)w * 3 + 1 + 65536;
+  g_shot_px = heap_caps_get_free_size(MALLOC_CAP_SPIRAM) >= copy + png &&
+                      heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) >= copy
+                  ? (uint16_t*)heap_caps_malloc(copy, MALLOC_CAP_SPIRAM)
+                  : nullptr;
+  if (g_shot_px) {
+    for (int y = 0; y < h; ++y) memcpy(g_shot_px + (size_t)y * w, src + (size_t)y * stride, (size_t)w * 2);
+    g_shot_src = g_shot_px, g_shot_stride = w;
+  } else {   // no room for a copy: the picture held still while it is saved (the display task leaves it alone)
+    g_shot_hold = true;
+    g_shot_src = src, g_shot_stride = stride;
   }
-  for (int y = 0; y < h; ++y) memcpy(g_shot_px + (size_t)y * w, src + (size_t)y * stride, (size_t)w * 2);
   g_shot_w = w, g_shot_h = h;
   g_shot_state = SHOT_SAVING;
   g_shot_start_ms = now_ms;
@@ -185,6 +199,7 @@ static void shot_start(int64_t now_ms) {
     g_shot_task = nullptr;
     heap_caps_free(g_shot_px);
     g_shot_px = nullptr;
+    g_shot_hold = false;
     Serial.println("shot: not enough memory for its task");
     g_shot_done_ms = now_ms;
     g_shot_state = SHOT_FAILED;
