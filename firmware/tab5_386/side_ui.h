@@ -16,6 +16,11 @@
 //             /sdcard/screenshots (screenshot.h): the camera's flash lights, then its light shows green (saved) or red
 //             (failed) for a while
 // The right panel's four windows line up with the left's keys: lights, CD tray, camera, battery.
+// From Nov 15 to Jan 6 (the local date; only once the clock was set: clock_valid) the panels are dressed for the
+// holidays: snow on the keys and windows, a garland along the top, presents and a snowman at the bottom, the lights
+// as baubles, a Santa hat on the camera, the hold ring in candy-cane stripes. Pictures made by tools/holiday
+// (holiday_art.h), on top of everything, drawn once like the rest. The keys a little smaller (104 px, rows 164 px
+// apart, from y 118) and the windows lower (132 px) for room at the top and bottom. Serial "holiday 1|0|auto".
 // Each panel is an LVGL display of its own (SIDE_W x SCR_H, anti-aliased), drawn where something changed and put on
 // the panel by the PPA (settings_ui.h's ppa_blit), only while the settings panel is closed. Drawn at once when
 // something changed (lv_refr_now), not by LVGL's timers: nothing here moves by itself, and LVGL run every 10 ms
@@ -23,16 +28,21 @@
 // here (touch.h), not through LVGL: a button's look follows them.
 #pragma once
 
+#include "holiday_art.h"
 static constexpr int SIDE_W = OUT_X, SIDE_HOLD_MS = 1000;
 static constexpr int64_t SIDE_DISK_MS = 120;   // the disk light stays on this long after the disk was used
 enum { SB_POWER, SB_RESET, SB_PAUSE, SB_SETUP, SB_N, SB_TRAY = SB_N + 1, SB_SHOT };   // (SB_N: anywhere, panels off)
-static constexpr int SB_SIZE = 112;
-static constexpr int sb_y(int i) { return 104 + i * 170; }   // a button's centre (both panels' rows)
-// The right panel's windows (lights, CD tray, camera, battery): one size, each on a row of the left panel's keys
-static constexpr int WELL_X = 16, WELL_W = SIDE_W - 32, WELL_H = 140;
-static constexpr int well_y(int i) { return sb_y(i) - WELL_H / 2; }
-static constexpr int TRAY_X = WELL_X, TRAY_Y = well_y(1), TRAY_W = WELL_W, TRAY_H = WELL_H;   // the CD tray
-static constexpr int CAM_Y = well_y(2);   // the camera's window
+static bool g_side_holi = false;   // dressed for the holidays (the layout below a little different)
+static int g_side_holi_force = -1;   // serial "holiday": 1 on, 0 off, -1 by the date
+static int sb_size() { return g_side_holi ? 104 : 112; }
+static int sb_y(int i) { return g_side_holi ? 118 + i * 164 : 104 + i * 170; }   // a button's centre (both panels' rows)
+// The right panel's windows (lights, CD tray, camera, battery): one size, each on a row of the left panel's keys;
+// what is in them placed for a 140 px window, well_dy() lower
+static constexpr int WELL_X = 16, WELL_W = SIDE_W - 32;
+static int well_h() { return g_side_holi ? 132 : 140; }
+static int well_dy() { return (well_h() - 140) / 2; }
+static int well_y(int i) { return sb_y(i) - well_h() / 2; }
+static constexpr int TRAY_X = WELL_X, TRAY_W = WELL_W;   // the CD tray: the second window (well_y(1)), the camera the third
 
 // the case: dark grey, a dark seam toward the picture (a light one there met the picture's text); keys raised on it (a light top edge, a shadow), lights in
 // recessed windows. Flat colours that RGB565 holds exactly (green steps twice as fine as red and blue: in between,
@@ -165,7 +175,8 @@ static void side_key_style(lv_obj_t* b) {   // raised, pressed in while touched
 static void side_key(lv_obj_t* scr, int i) {
   static const char* const icons[SB_N] = {LV_SYMBOL_POWER, LV_SYMBOL_REFRESH, LV_SYMBOL_PAUSE, LV_SYMBOL_SETTINGS};
   static const char* const names[SB_N] = {"POWER", "RESET", "PAUSE", "SETUP"};
-  lv_obj_t* b = g_sb_key[i] = side_box(scr, (SIDE_W - SB_SIZE) / 2, sb_y(i) - SB_SIZE / 2, SB_SIZE, SB_SIZE);
+  const int size = sb_size();
+  lv_obj_t* b = g_sb_key[i] = side_box(scr, (SIDE_W - size) / 2, sb_y(i) - size / 2, size, size);
   side_key_style(b);
   if (i == SB_POWER || i == SB_RESET) {   // the hold's ring, around the icon
     lv_obj_t* r = g_sb_ring[i] = lv_arc_create(b);
@@ -180,6 +191,7 @@ static void side_key(lv_obj_t* scr, int i) {
     lv_obj_set_style_arc_width(r, 5, LV_PART_INDICATOR);
     lv_obj_set_style_arc_rounded(r, true, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(r, lv_color_hex(i == SB_POWER ? K_RED : K_AMBER), LV_PART_INDICATOR);
+    if (g_side_holi) lv_obj_set_style_arc_image_src(r, &holi_cane, LV_PART_INDICATOR);   // (centred on the arc's centre)
     lv_obj_add_flag(r, LV_OBJ_FLAG_HIDDEN);
   }
   lv_obj_t* ic = g_sb_icon[i] = side_text(b, &lv_font_montserrat_36, K_INK, 0);
@@ -193,11 +205,12 @@ static void side_key(lv_obj_t* scr, int i) {
 // The CD tray: a drive's front in a recessed bay, its drawer (a groove across it; pressed in while touched) and the
 // disc's name. The whole bay is the button.
 static void side_tray(lv_obj_t* scr) {
-  lv_obj_t* w = side_well(scr, TRAY_X, TRAY_Y, TRAY_W, TRAY_H);
+  const int dy = well_dy();
+  lv_obj_t* w = side_well(scr, TRAY_X, well_y(1), TRAY_W, well_h());
   lv_obj_t* t = g_cd_label = side_text(w, &lv_font_montserrat_14, K_LABEL, 1);
   lv_label_set_text(t, "CD-ROM");
-  lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 16);
-  lv_obj_t* drawer = g_cd_drawer = side_box(w, 9, 42, TRAY_W - 20, 30);
+  lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 16 + dy);
+  lv_obj_t* drawer = g_cd_drawer = side_box(w, 9, 42 + dy, TRAY_W - 20, 30);
   lv_obj_set_style_radius(drawer, 6, 0);
   lv_obj_set_style_bg_opa(drawer, LV_OPA_COVER, 0);
   lv_obj_set_style_bg_color(drawer, lv_color_hex(K_KEY), 0);
@@ -214,7 +227,7 @@ static void side_tray(lv_obj_t* scr) {
   lv_obj_set_style_bg_opa(groove, LV_OPA_COVER, 0);
   lv_obj_set_style_bg_color(groove, lv_color_hex(K_EDGE), 0);
   g_cd_name = side_text(w, &lv_font_montserrat_14, K_INK, 0);
-  lv_obj_set_pos(g_cd_name, 6, 84);
+  lv_obj_set_pos(g_cd_name, 6, 84 + dy);
   lv_obj_set_size(g_cd_name, TRAY_W - 14, 36);
   lv_label_set_long_mode(g_cd_name, LV_LABEL_LONG_DOT);   // (two lines, then ...)
   lv_obj_set_style_text_align(g_cd_name, LV_TEXT_ALIGN_CENTER, 0);
@@ -234,10 +247,10 @@ static lv_obj_t* side_shape(lv_obj_t* parent, int x, int y, int w, int h, uint32
 static constexpr uint32_t K_CHROME = 0xA8B0B8, K_CHROME_DARK = 0x6A7078, K_BODY = 0x2C3136, K_BODY_RIM = 0x464C53,
                           K_GLASS = 0x1A2836, K_FROST = 0x8A939C;
 static void side_camera(lv_obj_t* scr) {
-  lv_obj_t* w = side_well(scr, WELL_X, CAM_Y, WELL_W, WELL_H);
-  lv_obj_t* c = g_cam = side_box(w, 0, 0, WELL_W, WELL_H);
+  lv_obj_t* w = side_well(scr, WELL_X, well_y(2), WELL_W, well_h());
+  lv_obj_t* c = g_cam = side_box(w, 0, 0, WELL_W, well_h());
   lv_obj_set_style_translate_y(c, 2, LV_STATE_PRESSED);
-  const int x0 = 14, y0 = 33;   // the body's top left (100 x 76 with the flash above it)
+  const int x0 = 14, y0 = 33 + well_dy();   // the body's top left (100 x 76 with the flash above it)
   // the flash: a dark housing on the top plate, its window lit while a picture is taken
   side_shape(c, x0 + 60, y0 - 4, 34, 22, K_CHROME_DARK, 4);
   g_cam_flash = side_shape(c, x0 + 64, y0, 26, 12, K_FROST, 2);
@@ -262,14 +275,22 @@ static void side_camera(lv_obj_t* scr) {
   side_shape(c, x0 + 43, y0 + 34, 6, 6, 0x8FA6BC, LV_RADIUS_CIRCLE);
 }
 
-static void side_setup() {   // after ui_setup (lv_init, the settings panel's display: the default one again after)
+static bool side_holiday_now() {   // Nov 15 .. Jan 6, local date (serial "holiday" overrides)
+  if (g_side_holi_force >= 0) return g_side_holi_force;
+  if (!clock_valid()) return false;
+  const time_t t = time(nullptr);
+  struct tm l;
+  localtime_r(&t, &l);
+  const int md = (l.tm_mon + 1) * 100 + l.tm_mday;
+  return md >= 1115 || md <= 106;
+}
+
+// The panels' objects made (again: at the start, and when the holidays begin or end), for g_side_holi
+static void side_build() {
+  g_sb_ring[SB_POWER] = g_sb_ring[SB_RESET] = nullptr;
   for (int k = 0; k < 2; ++k) {
-    lv_display_t* d = g_side_disp[k] = lv_display_create(SIDE_W, SCR_H);
-    lv_display_set_color_format(d, LV_COLOR_FORMAT_RGB565);
-    lv_display_set_flush_cb(d, side_flush);
-    const size_t buf = SIDE_W * 120 * 2;
-    lv_display_set_buffers(d, ui_alloc(buf), nullptr, buf, LV_DISPLAY_RENDER_MODE_PARTIAL);
-    lv_obj_t* scr = lv_display_get_screen_active(d);
+    lv_obj_t* scr = lv_display_get_screen_active(g_side_disp[k]);
+    lv_obj_clean(scr);
     lv_obj_remove_style_all(scr);
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
@@ -280,18 +301,41 @@ static void side_setup() {   // after ui_setup (lv_init, the settings panel's di
     if (k == 0) {
       for (int i = 0; i < SB_N; ++i) side_key(scr, i);
     } else {
-      lv_obj_t* w = side_well(scr, WELL_X, well_y(0), WELL_W, WELL_H);
-      g_sl_power = side_led(w, 18, 37, "POWER");
-      g_sl_disk = side_led(w, 18, 83, "DISK");
+      lv_obj_t* w = side_well(scr, WELL_X, well_y(0), WELL_W, well_h());
+      g_sl_power = side_led(w, 18, 37 + well_dy(), "POWER");
+      g_sl_disk = side_led(w, 18, 83 + well_dy(), "DISK");
       side_tray(scr);
       side_camera(scr);
-      lv_obj_t* bw = side_well(scr, WELL_X, well_y(3), WELL_W, WELL_H);
+      lv_obj_t* bw = side_well(scr, WELL_X, well_y(3), WELL_W, well_h());
       g_sl_batt_icon = side_text(bw, &lv_font_montserrat_36, K_LABEL, 0);
       lv_obj_align(g_sl_batt_icon, LV_ALIGN_CENTER, 0, -18);
       g_sl_batt_text = side_text(bw, &lv_font_montserrat_20, K_LABEL, 1);
       lv_obj_align(g_sl_batt_text, LV_ALIGN_CENTER, 0, 30);
     }
+    if (g_side_holi)   // the decorations, over everything
+      for (const HoliPiece& h : holi_pieces) {
+        if (h.panel != k) continue;
+        lv_obj_t* im = lv_image_create(scr);
+        lv_obj_remove_style_all(im);
+        lv_image_set_src(im, h.img);
+        lv_obj_set_pos(im, h.x, h.y);
+        lv_obj_remove_flag(im, LV_OBJ_FLAG_CLICKABLE);
+      }
   }
+  g_side_fresh = true;   // (side_show sets every part again)
+  g_side_redraw = 3;
+}
+
+static void side_setup() {   // after ui_setup (lv_init, the settings panel's display: the default one again after)
+  for (int k = 0; k < 2; ++k) {
+    lv_display_t* d = g_side_disp[k] = lv_display_create(SIDE_W, SCR_H);
+    lv_display_set_color_format(d, LV_COLOR_FORMAT_RGB565);
+    lv_display_set_flush_cb(d, side_flush);
+    const size_t buf = SIDE_W * 120 * 2;
+    lv_display_set_buffers(d, ui_alloc(buf), nullptr, buf, LV_DISPLAY_RENDER_MODE_PARTIAL);
+  }
+  g_side_holi = side_holiday_now();
+  side_build();
   lv_display_set_default(g_disp);
   g_side_made = true;
 }
@@ -480,6 +524,16 @@ static void side_poll(int64_t now) {
   }
   side_state_poll();
   if (!g_side_made || g_panel_open) return;
+  static int64_t holi_checked = 0;
+  if (now - holi_checked >= 10000 || g_side_holi_force >= 0) {   // (the date, every 10 s)
+    holi_checked = now;
+    const bool holi = side_holiday_now();
+    if (holi != g_side_holi && g_side_pressed < 0) {
+      g_side_holi = holi;
+      side_build();
+      Serial.printf("side panels: %s\n", holi ? "holiday" : "plain");
+    }
+  }
   const int redraw = side_show(side_wanted(now)) | g_side_redraw;
   g_side_redraw = 0;
   for (int k = 0; k < 2; ++k)
@@ -496,15 +550,16 @@ static bool side_owns(int x, int y) {   // a touch starting there is the side pa
 static int side_button_at(int x, int y) {
   if (!g_side_on) return -1;
   if (x >= SCR_W - SIDE_W) {   // the right panel: the CD tray, the camera
-    if (x >= SCR_W - SIDE_W + TRAY_X - 8 && x < SCR_W - SIDE_W + TRAY_X + TRAY_W + 8 && y >= TRAY_Y - 8 &&
-        y < TRAY_Y + TRAY_H + 8)
+    const int tray_y = well_y(1), cam_y = well_y(2), h = well_h();
+    if (x >= SCR_W - SIDE_W + TRAY_X - 8 && x < SCR_W - SIDE_W + TRAY_X + TRAY_W + 8 && y >= tray_y - 8 &&
+        y < tray_y + h + 8)
       return SB_TRAY;
-    return x >= SCR_W - SIDE_W + WELL_X - 8 && x < SCR_W - SIDE_W + WELL_X + WELL_W + 8 && y >= CAM_Y - 8 &&
-                   y < CAM_Y + WELL_H + 8 ? SB_SHOT : -1;
+    return x >= SCR_W - SIDE_W + WELL_X - 8 && x < SCR_W - SIDE_W + WELL_X + WELL_W + 8 && y >= cam_y - 8 &&
+                   y < cam_y + h + 8 ? SB_SHOT : -1;
   }
   if (x >= SIDE_W) return -1;
   for (int i = 0; i < SB_N; ++i)
-    if (abs(y - sb_y(i)) <= SB_SIZE / 2 + 8) return i;
+    if (abs(y - sb_y(i)) <= sb_size() / 2 + 8) return i;
   return -1;
 }
 

@@ -139,6 +139,9 @@ off; tap it: on again, starting afresh; the PC also goes off when its system pow
 stops) and **SETUP** (the settings panel); on the right the power light (green on, amber paused), the disk light (amber; both dim when off, as a real LED's
 lens), the **CD-ROM** tray, a **camera** (screenshots) and the battery (red when low). A ring
 fills around POWER's or RESET's icon while you hold it; a short tap on either does nothing while the PC runs.
+From November 15 to January 6 the side panels are dressed for the holidays (snow, a garland, presents and a
+snowman, a Santa hat on the camera), once the Tab5's clock has been set (opening its web page sets it; see
+**Screenshots**).
 
 **Screenshots**: tap the **camera** and the PC's picture is saved on the card in `screenshots/`, as a PNG named by the
 day and that day's count (`2026-11-05_001.png`), at the picture's own size (640 x 400 for 80-column text, 320 x 200

@@ -1,0 +1,65 @@
+<!doctype html>
+<!-- The side panels' holiday decorations (side_ui.h), drawn on a transparent 320 x 720 page: the left panel at x 0,
+     the right at x 160. make_art.py screenshots it (#overlay) and cuts it into the pieces of holiday_art.h.
+     #preview draws them over a rough copy of the panels, to look at. The geometry is side_ui.h's holiday layout. -->
+<html><head><meta charset="utf-8">
+<style>html, body { margin: 0; background: transparent; } svg { position: absolute; top: 0; }</style>
+</head><body>
+<svg id="L" width="160" height="720" style="left:0" xmlns="http://www.w3.org/2000/svg"></svg>
+<svg id="R" width="160" height="720" style="left:160px" xmlns="http://www.w3.org/2000/svg"></svg>
+<script src="deco.js"></script>
+<script>
+// side_ui.h, holiday: keys 104 px on a 164 px pitch from y 118, windows 128 x 132 at x 16; the windows' contents 4 px
+// higher than in the plain layout's 140 px windows
+const KEY = 104, PITCH = 164, Y0 = 118, WELL_X = 16, WELL_W = 128, WELL_H = 132, DY = (WELL_H - 140) / 2;
+const keyX = (160 - KEY) / 2, keyY = i => Y0 + PITCH * i - KEY / 2, wellY = i => Y0 + PITCH * i - WELL_H / 2;
+const p = 'a';
+const defs = `<defs><linearGradient id="${p}ice" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#EAF3FB"/>
+  <stop offset="1" stop-color="#9FC3E3" stop-opacity=".15"/></linearGradient></defs>`;
+
+function ledCap(cx, cy) {   // a bauble's hanger over a light (the light, an lv_led, is the bauble)
+  return `<line x1="${cx}" y1="${cy - 14}" x2="${cx}" y2="${cy - 24}" stroke="#7A828C" stroke-width="1"/>
+    <rect x="${cx - 3.5}" y="${cy - 14}" width="7" height="5" rx="1" fill="#C9A23A"/>
+    <ellipse cx="${cx - 3.2}" cy="${cy - 3.4}" rx="2.6" ry="1.6" fill="#fff" opacity=".45" transform="rotate(-35 ${cx - 3.2} ${cy - 3.4})"/>`;
+}
+
+const left = [defs, garland(-6, 160, 6, 9, 1, p)];
+for (let i = 0; i < 4; i++) left.push(snowCap(keyX + 3, keyY(i), KEY - 6, 11 + i * 7));
+left.push(holly(keyX + 10, keyY(0) + 12, .85));
+left.push(flake(134, 196, 5, .5), flake(22, 206, 4, .4), flake(20, 362, 6, .5, 20), flake(138, 372, 4, .4),
+  flake(140, 526, 6, .5, 5), flake(26, 534, 4, .4), dots([10, 176, 140, 48], 5, 3), dots([10, 340, 140, 48], 4, 7),
+  dots([10, 504, 140, 48], 5, 9));
+left.push(drift(0, 154, 716, 10, 5), present(14, 716, 38, 28, '#B71C24', '#F2C14E'), present(58, 716, 32, 36, '#1E7A44', '#F3F7FB'),
+  present(96, 716, 42, 22, '#2F5DAA', '#E5484D'));
+
+const right = [defs, garland(0, 166, 4, 8, 2, p)];
+for (let i = 0; i < 4; i++) {
+  right.push(snowCap(WELL_X + 4, wellY(i), WELL_W - 8, 41 + i * 5, 6));
+  if (i < 3) right.push(icicles(WELL_X + 18, WELL_X + WELL_W - 18, wellY(i) + WELL_H + .5, 70 + i, p, 8));
+}
+const led = wellY(0) + DY;
+right.push(ledCap(43, led + 37 + 9), ledCap(43, led + 83 + 9));
+const camX = WELL_X + 14, camY = wellY(2) + DY + 33;   // the camera's body, as side_camera's x0, y0
+right.push(santaHat(camX + 4, camY + 10));
+right.push(flake(30, 200, 4, .45), flake(128, 364, 5, .5, 15), flake(40, 530, 4, .45), dots([20, 188, 120, 24], 3, 21),
+  dots([20, 352, 120, 24], 3, 23), dots([20, 516, 120, 24], 3, 25));
+right.push(drift(6, 160, 716, 8, 8), present(26, 714, 30, 20, '#B71C24', '#F3F7FB'), snowman(132, 714));
+
+let base = '';
+if (location.hash === '#preview') {   // a rough copy of the panels underneath
+  document.body.style.background = '#000';
+  const k = [];
+  for (let i = 0; i < 4; i++) k.push(`<rect x="${keyX}" y="${keyY(i)}" width="${KEY}" height="${KEY}" rx="22" fill="#383C40" stroke="#181C20"/>
+    <circle cx="80" cy="${Y0 + PITCH * i - 12}" r="16" fill="none" stroke="#DDE2E8" stroke-width="4"/>`);
+  document.getElementById('L').innerHTML = `<rect width="160" height="720" fill="#202428"/><rect x="154" width="6" height="720" fill="#080C10"/>${k.join('')}`;
+  const w = [];
+  for (let i = 0; i < 4; i++) w.push(`<rect x="${WELL_X}" y="${wellY(i)}" width="${WELL_W}" height="${WELL_H}" rx="18" fill="#101418" stroke="#303438"/>`);
+  w.push(`<circle cx="43" cy="${led + 46}" r="9" fill="#3DDC84"/><circle cx="43" cy="${led + 92}" r="9" fill="#4A3A12"/>`);
+  w.push(`<rect x="${camX}" y="${camY + 12}" width="100" height="20" rx="6" fill="#A8B0B8"/><rect x="${camX}" y="${camY + 28}" width="100" height="48" rx="8" fill="#2C3136"/>
+    <rect x="${camX + 60}" y="${camY - 4}" width="34" height="22" rx="4" fill="#6A7078"/><circle cx="${camX + 50}" cy="${camY + 42}" r="24" fill="#A8B0B8"/>`);
+  document.getElementById('R').innerHTML = `<rect width="160" height="720" fill="#202428"/><rect width="6" height="720" fill="#080C10"/>${w.join('')}`;
+}
+document.getElementById('L').insertAdjacentHTML('beforeend', left.join(''));
+document.getElementById('R').insertAdjacentHTML('beforeend', right.join(''));
+</script>
+</body></html>

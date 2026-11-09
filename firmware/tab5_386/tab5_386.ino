@@ -17,6 +17,7 @@
 //                  e0/e1/e2 = Ctrl/Shift/Alt)
 //                  | fps <n> (screen refresh rate, 0 = paused) | mem | vol <0-255> | mouse <gain> | wifi on|off | wifi <ssid> <password> | ip | net | raw 0|1 | steps <n> | vgafast 0|1 | peek <addr> [<len>] | panel
 //                  | text (the screen's text in a text mode) | stap <x> <y> <ms> (a press on the side panels)
+//                  | holiday 1|0|auto (the side panels' holiday look: on, off, by the date)
 //                  | pd [0|1] (the fast path's pre-decoded blocks; off / on) | reset (the PC's reset button) | poweroff
 //                  | shot (a screenshot to /sdcard/screenshots, as the side panel's camera) | clock [YYYY-MM-DD HH:MM:SS (UTC)]
 //                  | clock tz <POSIX TZ> (the time zone for local time: screenshots' names, file dates)
@@ -765,6 +766,10 @@ static void handle_serial() {
     } else if (line.startsWith("raw ")) {   // raw 0|1: disk images as raw card sectors (from the next start)
       g_prefs.putBool("raw", line.substring(4).toInt() != 0);
       Serial.println("raw access: from the next start");
+    } else if (line.startsWith("holiday ")) {   // holiday 1|0|auto: the side panels dressed for the holidays or not
+      const String v = line.substring(8);   // (auto: Nov 15 .. Jan 6 once the clock is set; side_ui.h)
+      g_side_holi_force = v == "auto" ? -1 : v.toInt() != 0;
+      Serial.printf("holiday: %s\n", g_side_holi_force < 0 ? "by the date" : g_side_holi_force ? "on" : "off");
     } else if (line == "shot") {   // a screenshot, as the side panel's camera (screenshot.h)
       shot_start(esp_timer_get_time() / 1000);
     } else if (line == "clock" || line.startsWith("clock ")) {   // clock [YYYY-MM-DD HH:MM:SS]: the Tab5's clock

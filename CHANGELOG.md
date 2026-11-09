@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- The side panels dress for the holidays from November 15 to January 6 (the local date, once the Tab5's clock has
+  been set): thin snow caps on the keys and windows with icicles and flakes, a pine garland with baubles along the
+  top, presents and a snowman at the bottom, the power and disk lights hung as baubles, a Santa hat on the camera and
+  the hold ring in candy-cane stripes. The keys are a little smaller (104 px) and the right-hand windows shorter (132
+  px) to make room. The decorations are pictures drawn once, like the rest of the panels;
+  `tools/holiday/make_art.py` makes them (`firmware/tab5_386/holiday_art.h`) from `tools/holiday/art.html`. Serial
+  `holiday 1|0|auto` shows or hides them for now, or goes back to the date.
 - Fixed: a DOS debugger's quit, go and trace commands restarted the Tab5 (an IRET with a 32-bit operand outside
   protected mode stopped the emulator); now handled as QEMU does (`vendor/patches/0030`).
 - The trap flag works: a debugger's trace runs one instruction at a time (tiny386 had no single-step trap).
