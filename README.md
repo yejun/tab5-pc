@@ -253,7 +253,8 @@ saves the PC's screen (`--panel`: the Tab5's). Commands are listed at the top of
 The PC is roughly as fast as a 486 of the early 1990s for typical DOS programs: simple integer instructions run at
 about 20-30 million a second. A fast interpreter in front of tiny386's own handles the common instructions, and a
 translator turns frequently run code into RISC-V code (real, virtual-8086 and protected mode, paged or not). The x87 runs in
-software, with single precision on the ESP32-P4's FPU where that gives the same result. Text and EGA/VGA programs
+software, with single precision on the ESP32-P4's FPU where that gives the same result (in translated code, runs of
+such instructions keep the x87's registers in the FPU's). Text and EGA/VGA programs
 draw at up to ~30 frames a second; only what changed on the screen is redrawn.
 
 Notes from the development are in [`docs/NOTES.md`](docs/NOTES.md).

@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- Faster x87 floating-point code. Runs of consecutive x87 instructions that have inline code (single-precision loads
+  and stores, the arithmetic, the compares, FXCH, FLD/FST ST(i), FILD/FIST with 32-bit integers, FNSTSW AX) are
+  translated with the x87's registers in the ESP32-P4's FPU registers: each value is loaded once and stored back once
+  at the end of the run, and FXCH and the stack copies need no code at all; before, each instruction was a call of
+  its routine. When a value isn't a normal single the registers are written back and the exact software path takes
+  over, as before. With paging, operands close together in memory share one TLB lookup. FLDCW, FNSTCW and FNSTSW
+  AX are done in translated code too (float-to-int conversions change the control word twice each). A 3D game's
+  timedemo: 3.6 -> 4.3 fps. Serial `jit x87fast 0|1` turns the runs off and on; `jit` counts them.
+- 32-bit protected-mode programs whose data and stack segments start where their code segment does, at an address
+  other than 0 (DOS extenders that give a program its own base), have that base built into the translated code
+  instead of loading it for each memory access (about 1%).
+- A halted PC (HLT, waiting for an interrupt) lets the Tab5's second core rest: it sleeps a millisecond at a time
+  while the PC's timer interrupts no more often than every 3 ms and no input waits, instead of a busy wait (the
+  FreeDOS prompt: second core resting 0 -> 99% of the time). A loop that only waits for an interrupt to change
+  something (a jump back to its own start after compares and loads) halts the CPU the same way. Serial `idle 0|1`
+  and `jit idle 0|1`; `S` shows the sleeps.
+- With paging, writes into a page that holds translated code, but beside the code (data next to code: small DOS
+  programs, resident programs), are done in translated code instead of going through C each time (a test loop
+  under a memory manager: 194 -> 118 ticks). Serial `jit ctagw 0|1`.
+- The translator's dispatcher finds a block's place in the code cache through an index instead of a search through
+  PSRAM, and code it makes or patches is made executable in one go before translated code runs again (one cache
+  operation and one fence.i instead of one per change): a big protected-mode system's startup did 11 thousand of
+  them a second, now 7.5 thousand. Serial `jit tlbinline 0|1` puts paged TLB lookups into the blocks instead of a
+  call (off: no gain).
+- Serial `vga cell <row> <col>`: a text cell's character and attribute, the font maps selected, and its glyph in
+  both maps, for looking into wrong characters on a text screen.
 - Fixed: a screenshot of Sprig Linux's 800 x 600 console often wasn't saved: the copy of the picture (960 KB) and
   the PNG writer's memory (~200 KB) didn't both fit beside the PC. When they don't, the PC's picture now holds still
   on the screen for a moment (~330 ms) while the PNG is made from it, the PC running on; with room, as before.

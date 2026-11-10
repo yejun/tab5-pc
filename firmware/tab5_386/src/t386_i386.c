@@ -95,6 +95,22 @@ static void t386_jit_sync(void* p, size_t n) {
   t386_sync_cycles += esp_cpu_get_cycle_count() - c0;
   t386_sync_calls++;
 }
+// several ranges at once, in one critical section and with one fence.i (t386_jit.h, jit_sync_flush)
+#define T386_JIT_SYNC_MANY
+static void t386_jit_sync_many(void* const* p, const size_t* n, int count) {
+  const uint32_t c0 = esp_cpu_get_cycle_count();
+  asm volatile("fence rw, rw" ::: "memory");
+  esp_cache_sync_ops_enter_critical_section();
+  for (int i = 0; i < count; i++) {
+    uintptr_t a = (uintptr_t)p[i] & ~(uintptr_t)127, e = ((uintptr_t)p[i] + n[i] + 127) & ~(uintptr_t)127;
+    t386_cache_op(CACHE_MAP_L1_DCACHE, CACHE_WRITEBACK_ENA, a, e - a);
+    t386_cache_op(CACHE_MAP_L1_ICACHE_MASK, CACHE_INVALIDATE_ENA, a, e - a);
+  }
+  esp_cache_sync_ops_exit_critical_section();
+  asm volatile("fence.i" ::: "memory");
+  t386_sync_cycles += esp_cpu_get_cycle_count() - c0;
+  t386_sync_calls++;
+}
 
 #include "t386_cpu_wrap.h"
 #include "i386.c"

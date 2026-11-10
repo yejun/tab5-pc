@@ -18,6 +18,7 @@
 //                  | fps <n> (screen refresh rate, 0 = paused) | mem | vol <0-255> | mouse <gain> | wifi on|off | wifi <ssid> <password> | ip | net | raw 0|1 | steps <n> | vgafast 0|1 | peek <addr> [<len>] | panel
 //                  | text (the screen's text in a text mode) | stap <x> <y> <ms> (a press on the side panels)
 //                  | holiday 1|0|auto (the side panels' holiday look: on, off, by the date)
+//                  | idle 0|1 (a halted PC lets core 1 sleep) | vga cell <row> <col> (a text cell, its font maps, glyphs)
 //                  | pd [0|1] (the fast path's pre-decoded blocks; off / on) | reset (the PC's reset button) | poweroff
 //                  | shot (a screenshot to /sdcard/screenshots, as the side panel's camera) | clock [YYYY-MM-DD HH:MM:SS (UTC)]
 //                  | clock tz <POSIX TZ> (the time zone for local time: screenshots' names, file dates)
@@ -69,6 +70,7 @@ extern int t386_step_max;
 uint32_t t386_vga_frame_hash(VGAState* s);
 int t386_vga_text(VGAState* s, void (*out)(const char*));
 void t386_vga_snapshot(VGAState* s, uint8_t* shadow, size_t shadow_size);
+int t386_vga_cell_report(VGAState* s, int row, int col, char* buf, int len);
 uint32_t t386_mix(uint32_t h, const void* p, size_t n);
 extern VGAState* t386_vga;   // the fast video memory paths (src/t386_vga_ext.h)
 void t386_vga_fw_update(void);
@@ -105,6 +107,23 @@ static volatile uint64_t g_hpc_cyc = 0, g_hpc_ins = 0;   // core 1's cycles and 
 // and handed over by core 1, between steps.
 struct InputEvent { int8_t kind; int8_t down_or_buttons; int16_t code_or_dx, dy; };   // kind 0: key, 1: mouse
 static QueueHandle_t g_input;   // created in setup()
+
+// The PC halted (HLT, or a loop that only waits: t386_jit.h): core 1 sleeps a FreeRTOS tick (~1 ms, the idle task's
+// WFI) when the timer (PIT channel 0) interrupts every 3 ms or less often and no input waits; else a microsecond, as
+// before. Serial "idle 0|1" (1: on); "S" counts the sleeps.
+static volatile bool g_idle_sleep = true;
+static uint32_t g_idle_sleeps;
+extern "C" void t386_halt_wait(void) {
+  if (g_idle_sleep && g_pc && !uxQueueMessagesWaiting(g_input)) {
+    const int count = pit_get_initial_count(g_pc->pit, 0);
+    if ((count ? count : 0x10000) >= 3579) {   // (3 ms at 1.193182 MHz)
+      g_idle_sleeps++;
+      vTaskDelay(1);
+      return;
+    }
+  }
+  usleep(1);
+}
 
 static void input_put(const InputEvent& e) {
   if (xQueueSend(g_input, &e, 0) != pdTRUE) Serial.println("input: queue full, event dropped");
@@ -490,6 +509,11 @@ static void print_stats() {
     Serial.printf("code sync: %.0f/s, %.1f%% of core 1\n", (t386_sync_calls - last_sc) / dt,
                   (t386_sync_cycles - last_scyc) / dt / 3.6e6);
     last_sc = t386_sync_calls, last_scyc = t386_sync_cycles;
+    static uint32_t last_isl, last_ih;
+    extern uint32_t t386_jit_idle_halts;
+    Serial.printf("idle: %.0f sleeps/s (halted, core 1 resting); %.0f/s halts at loops that only wait\n",
+                  (g_idle_sleeps - last_isl) / dt, (t386_jit_idle_halts - last_ih) / dt);
+    last_isl = g_idle_sleeps, last_ih = t386_jit_idle_halts;
     Serial.printf("core 1: %.0f M cycles/s, %.0f M host instr/s, IPC %.2f, %.0f host cycles and %.0f host instr per guest instr\n",
                   (c - c0) / dt / 1e6, (n - n0) / dt / 1e6, (double)(n - n0) / (c - c0),
                   (c - c0) / dcyc, (n - n0) / dcyc);
@@ -655,7 +679,7 @@ static void handle_serial() {
         p = e + 2;
       }
     } else if (line == "jit") {
-      static char buf[900];
+      static char buf[1200];
       t386_jit_report(buf, sizeof(buf));
       for (char* p = buf; *p; ) {   // in pieces at "; ": the USB serial drops what doesn't fit its buffer
         char* e = strstr(p, "; ");
@@ -674,6 +698,25 @@ static void handle_serial() {
     } else if (line.startsWith("jit hot ")) {   // translate code once reached this many times (t386_jit.h)
       t386_jit_hot = constrain(line.substring(8).toInt(), 0, 255);
       Serial.printf("jit hot %d\n", t386_jit_hot);
+    } else if (line == "jit idle 0" || line == "jit idle 1") {   // loops that only wait halt the CPU (t386_jit.h)
+      extern int t386_jit_idle;
+      t386_jit_idle = line == "jit idle 1";
+      Serial.printf("jit idle %d\n", t386_jit_idle);
+    } else if (line == "idle 0" || line == "idle 1") {   // a halted PC sleeps core 1 (1) or waits a microsecond (0)
+      g_idle_sleep = line == "idle 1";
+      Serial.printf("idle %d\n", (int)g_idle_sleep);
+    } else if (line.startsWith("jit ctagw ")) {   // paged writes beside translated code done in it (1) or in C (0)
+      extern int t386_jit_ctagw;
+      t386_jit_ctagw = line.substring(10).toInt();
+      Serial.printf("ctagw %d\n", t386_jit_ctagw);
+    } else if (line == "jit x87fast 0" || line == "jit x87fast 1") {   // x87 runs in host registers off or on (t386_jit.h)
+      extern int t386_jit_x87fast;
+      t386_jit_x87fast = line.endsWith("1");
+      Serial.printf("jit x87fast %d\n", t386_jit_x87fast);
+    } else if (line.startsWith("jit tlbinline ")) {   // paged accesses' TLB lookups in the blocks (1) or called (0)
+      extern int t386_jit_tlb_inline;
+      t386_jit_tlb_inline = line.substring(14).toInt();
+      Serial.printf("tlbinline %d\n", t386_jit_tlb_inline);
     } else if (line.startsWith("jit xlink ")) {   // the translator's links across pages on or off (t386_jit.h)
       extern int t386_jit_xlink;
       t386_jit_xlink = line.substring(10).toInt();
@@ -743,6 +786,12 @@ static void handle_serial() {
     } else if (line.startsWith("mouse ")) {   // touchpad speed: PS/2 counts per pixel of finger movement
       g_mouse_gain = constrain(line.substring(6).toFloat(), 0.1f, 8.0f);
       Serial.printf("mouse gain %.2f\n", g_mouse_gain);
+    } else if (line.startsWith("vga cell ")) {   // vga cell <row> <col>: a text cell, the font maps, its glyphs
+      static char buf[400];
+      int row = 0, col = 0;
+      sscanf(line.c_str() + 9, "%d %d", &row, &col);
+      t386_vga_cell_report(g_pc->vga, row, col, buf, sizeof(buf));
+      Serial.print(buf);
     } else if (line == "vgafast 0" || line == "vgafast 1") {   // the fast video memory paths (src/t386_vga_ext.h)
       t386_vga = line == "vgafast 1" ? g_pc->vga : nullptr;
       t386_vga_fw_update();

@@ -70,6 +70,26 @@ uint32_t t386_vga_frame_hash(VGAState* s) {
 // The copy takes a moment. NULL: refresh from the video memory itself again. shadow_size: the copy's size, at least
 // 256 KB; a VBE picture that lies beyond it is refreshed from the video memory itself (the native renderer draws
 // most VBE modes: these are the ones with 4 bits a pixel, or all with serial "native 0").
+// Serial "vga cell <row> <col>": the text cell there (character, attribute), the character map select (SR03) and
+// the cell's glyph in maps A and B as vga_text_refresh reads them (font_base), and SR02/SR04/GR04-06/CR09.
+int t386_vga_cell_report(VGAState* s, int row, int col, char* buf, int len) {
+    const uint32_t v = s->sr[3];
+    const int mb = ((v >> 4) & 1) | ((v << 1) & 6), ma = ((v >> 5) & 1) | ((v >> 1) & 6);
+    const uint32_t start = s->cr[0x0d] | (s->cr[0x0c] << 8), line = (uint32_t)s->cr[0x13] << 3;
+    const uint8_t* cell = s->vga_ram + ((4 * start + row * line + 4 * col) & 0x1fffe);   // (as vga_text_refresh)
+    const uint8_t ch = cell[0], at = cell[1];
+    int n = snprintf(buf, len, "cell %d,%d: char %02x attr %02x | SR02 %02x SR03 %02x (map B %d, map A %d) SR04 %02x "
+                     "GR04 %02x GR05 %02x GR06 %02x CR09 %02x\n", row, col, ch, at,
+                     s->sr[2], v, mb, ma, s->sr[4], s->gr[4], s->gr[5], s->gr[6], s->cr[9]);
+    for (int m = 0; m < 2 && n < len; m++) {
+        const uint8_t* g = s->vga_ram + (m ? ma : mb) * 8192 * 4 + 2 + 32 * 4 * ch;
+        n += snprintf(buf + n, len - n, "map %c glyph:", m ? 'A' : 'B');
+        for (int i = 0; i < 16 && n < len; i++) n += snprintf(buf + n, len - n, " %02x", g[4 * i]);
+        n += snprintf(buf + n, len - n, "\n");
+    }
+    return n;
+}
+
 void t386_vga_snapshot(VGAState* s, uint8_t* shadow, size_t shadow_size) {
     if (shadow) {
         size_t start = 0, len = s->vga_ram_size < 0x40000 ? s->vga_ram_size : 0x40000;   // planes, text, fonts

@@ -30,6 +30,8 @@
 // runs one instruction and then raises the debug trap)
 #define FAST_STOP_DUE(cpu) (((cpu)->intr && ((cpu)->flags & IF)) || ((cpu)->flags & TF))
 
+unsigned t386_irq_seq;   // hardware interrupts taken (cpui386_step: a loop that only waits, t386_jit.h)
+
 typedef u16 __attribute__((may_alias)) u16a;
 typedef u32 __attribute__((may_alias)) u32a;
 
@@ -848,6 +850,10 @@ static void fast_deliver(CPUI386 *cpu, int no, bool pusherr)
 	t386_shutdown();
 }
 
+// A step with the CPU halted (HLT, waiting for an interrupt): the platform's wait before the devices are looked at
+// again. This one, a microsecond; the firmware's sleeps when no interrupt can be due soon (core 1 idles).
+__attribute__((weak)) void t386_halt_wait(void) { usleep(1); }
+
 // tiny386's cpui386_step, through the fast path (and the translator)
 void cpui386_step(CPUI386 *cpu, int stepcount)
 {
@@ -857,12 +863,12 @@ void cpui386_step(CPUI386 *cpu, int stepcount)
 		int no = cpu->cb.pic_read_irq(cpu->cb.pic);
 		cpu->ip = cpu->next_ip;
 		t386_int_hw[no & 0xff]++;
-		
+		t386_irq_seq++;
 		fast_deliver(cpu, no, false);
 	}
 
 	if (cpu->halt) {
-		usleep(1);
+		t386_halt_wait();
 		return;
 	}
 

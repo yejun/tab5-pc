@@ -52,6 +52,11 @@ Lessons:
 - **Single precision where it is exact.** The ESP32-P4 has a single-precision FPU. When the x87's precision control
   asks for single precision and the operands and result are normal singles, the FPU gives the x87's result; anything
   else (zeros, denormals, overflow) takes the exact software path.
+- **Keep the x87's stack in registers across a run.** A call per x87 instruction spent most of its time on the
+  stack's bookkeeping (TOP, which values are kept as singles), not the arithmetic. Translating a run of them while
+  tracking the stack relative to TOP at its start lets the slots live in FPU registers: loaded once, stored once,
+  FXCH free. A result always goes to a fresh register, so when an instruction's check fails the registers still hold
+  the state from before it, and that state is written back for the ordinary code to carry on from.
 - **Check against a reference.** The fast paths were checked instruction by instruction against tiny386's own
   interpreter, and the x87 against QEMU, on the PC. Most bugs showed up as a first differing register.
 

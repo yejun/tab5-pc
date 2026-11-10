@@ -487,6 +487,7 @@ size_t t386_fpu_state_size(void) { return sizeof(FPU); }
 void t386_fpu_layout(struct T386FpuLayout *l)
 {
 	l->cw = offsetof(FPU, cw);
+	l->sw = offsetof(FPU, sw);
 	l->top = offsetof(FPU, top);
 	l->rawtagw = offsetof(FPU, rawtagw);
 	l->sv = offsetof(FPU, sv);
