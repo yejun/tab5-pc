@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 1.7.0 (2026-11-11)
+
+The side panels dressed for the holidays, faster x87 floating-point code, a resting second core while the PC
+halts, translator speedups, and fixes for DOS debuggers and screenshots of large screens. The firmware image with
+its notices and corresponding source, as for 1.6.0.
 
 - Faster x87 floating-point code. Runs of consecutive x87 instructions that have inline code (single-precision loads
   and stores, the arithmetic, the compares, FXCH, FLD/FST ST(i), FILD/FIST with 32-bit integers, FNSTSW AX) are
