@@ -6,10 +6,10 @@ set, and CPUID's feature bits are the 486's, the FPU only: no time-stamp counter
 Pentium (gen 5).
 
 diff --git a/i386.c b/i386.c
-index bd653cc..59df619 100644
+index ef7aae4..1ea48b7 100644
 --- a/i386.c
 +++ b/i386.c
-@@ -2568,7 +2568,7 @@ static bool call_isr(CPUI386 *cpu, int no, bool pusherr, int ext);
+@@ -2569,7 +2569,7 @@ static bool call_isr(CPUI386 *cpu, int no, bool pusherr, int ext);
  	}
  
  #define EFLAGS_MASK_386 0x37fd7
@@ -18,7 +18,7 @@ index bd653cc..59df619 100644
  #define EFLAGS_MASK_586 0x277fd7
  #define EFLAGS_MASK (cpu->flags_mask)
  
-@@ -3866,7 +3866,7 @@ static bool verrw_helper(CPUI386 *cpu, int sel, int wr, int *zf)
+@@ -3867,7 +3867,7 @@ static bool verrw_helper(CPUI386 *cpu, int sel, int wr, int *zf)
  	case 1: \
  		REGi(0) = 0 | (0 << 4) | (cpu->gen << 8); \
  		REGi(3) = 0; \

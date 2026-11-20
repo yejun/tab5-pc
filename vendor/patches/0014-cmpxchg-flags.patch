@@ -2,10 +2,10 @@ CMPXCHG sets the flags of the comparison the way x86 does: accumulator - destina
 accumulator: CF, SF and OF came out the other way round when the two differ).
 
 diff --git a/i386.c b/i386.c
-index 580a1c6..bd653cc 100644
+index 1b49ddc..ef7aae4 100644
 --- a/i386.c
 +++ b/i386.c
-@@ -3800,12 +3800,12 @@ static bool verrw_helper(CPUI386 *cpu, int sel, int wr, int *zf)
+@@ -3801,12 +3801,12 @@ static bool verrw_helper(CPUI386 *cpu, int sel, int wr, int *zf)
  
  // 486...
  #define CMPXCH_helper(BIT, a, b, la, sa, lb, sb) \

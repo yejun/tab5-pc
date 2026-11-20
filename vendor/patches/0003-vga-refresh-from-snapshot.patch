@@ -1,10 +1,10 @@
 vga: let vga_refresh read the picture from a copy of the video memory (VGAState.vga_ram_view).
 
 diff --git a/vga.c b/vga.c
-index 2c4e4c2..c739fed 100644
+index 945f508..137fb96 100644
 --- a/vga.c
 +++ b/vga.c
-@@ -103,6 +103,9 @@ struct VGAState {
+@@ -115,6 +115,9 @@ struct VGAState {
  
      uint8_t *vga_ram;
      int vga_ram_size;
@@ -14,7 +14,7 @@ index 2c4e4c2..c739fed 100644
      
      uint8_t sr_index;
      uint8_t sr[8];
-@@ -834,7 +837,7 @@ static void vga_text_refresh(VGAState *s,
+@@ -870,7 +873,7 @@ static void vga_text_refresh(VGAState *s,
          blink_changed = 0;
      (void) blink_changed;   /* not looked at with FULL_UPDATE */
  
@@ -23,7 +23,7 @@ index 2c4e4c2..c739fed 100644
  
      const uint8_t *font_base[2];
      uint32_t v = s->sr[0x3];
-@@ -1160,7 +1163,7 @@ static void vga_graphic_refresh(VGAState *s,
+@@ -1196,7 +1199,7 @@ static void vga_graphic_refresh(VGAState *s,
  //        line_compare = 65535;
      }
      uint32_t addr1 = 4 * start_addr;

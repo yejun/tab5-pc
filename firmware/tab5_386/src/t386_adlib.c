@@ -19,19 +19,19 @@ static void opl_take(void) {
 }
 static void opl_give(void) { xSemaphoreGive(opl_lock); }
 
+// (Not for the address port's writes nor for reads: the address latch and the status are the PC's side's alone,
+// which the rendering doesn't touch. A driver that waits by reading the status, 6 times after an address and 35
+// after a value as the AdLib's manual says, took the mutex 43 times for a register: a game's music, 20 thousand
+// times a second, 5% of core 1.)
 static int t386_opl_write(FM_OPL* opl, int a, int v) {
+  if (!(a & 1)) return OPLWrite(opl, a, v);
   opl_take();
   const int r = OPLWrite(opl, a, v);
   opl_give();
   return r;
 }
 
-static unsigned char t386_opl_read(FM_OPL* opl, int a) {
-  opl_take();
-  const unsigned char r = OPLRead(opl, a);
-  opl_give();
-  return r;
-}
+static unsigned char t386_opl_read(FM_OPL* opl, int a) { return OPLRead(opl, a); }
 
 static int t386_opl_timer_over(FM_OPL* opl, int c) {
   opl_take();

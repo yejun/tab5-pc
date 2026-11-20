@@ -148,16 +148,36 @@ void t386_irq_report(char* buf, int len) {
 }
 
 // The guest CPU's registers and the code at CS:EIP (serial "cpu"): where a program is, e.g. one that hangs.
+// A byte of the guest's memory at a linear address, through its page tables when paging is on (-1: not mapped)
+int t386_lin_peek(CPUI386* cpu, uword lin) {
+    uword phys = lin;
+    if (cpu->cr0 & 0x80000000u) {
+        const uword pde_at = (cpu->cr3 & ~0xfffu) + (lin >> 22) * 4;
+        if (pde_at + 4 > (uword)cpu->phys_mem_size) return -1;
+        uword pde, pte;
+        memcpy(&pde, cpu->phys_mem + pde_at, 4);
+        if (!(pde & 1)) return -1;
+        const uword pte_at = (pde & ~0xfffu) + ((lin >> 12) & 0x3ff) * 4;
+        if (pte_at + 4 > (uword)cpu->phys_mem_size) return -1;
+        memcpy(&pte, cpu->phys_mem + pte_at, 4);
+        if (!(pte & 1)) return -1;
+        phys = (pte & ~0xfffu) | (lin & 0xfff);
+    }
+    return phys < (uword)cpu->phys_mem_size ? (u8)cpu->phys_mem[phys] : -1;
+}
+
 void t386_cpu_regs(CPUI386* cpu, char* buf, int len) {
     const uword cs_base = cpu->seg[SEG_CS].base, lin = cs_base + cpu->ip;
     int n = snprintf(buf, len,
                      "cs:eip %04x:%08x (lin %08x) ss:esp %04x:%08x ds %04x es %04x | eax %08x ebx %08x ecx %08x edx %08x "
-                     "esi %08x edi %08x ebp %08x | flags %08x (IF %d) cr0 %08x %s%s | code",
+                     "esi %08x edi %08x ebp %08x | flags %08x (IF %d) cr0 %08x cr3 %08x %s%s | code",
                      (unsigned)cpu->seg[SEG_CS].sel, (unsigned)cpu->ip, (unsigned)lin, (unsigned)cpu->seg[SEG_SS].sel,
                      (unsigned)REGi(4), (unsigned)cpu->seg[SEG_DS].sel, (unsigned)cpu->seg[SEG_ES].sel,
                      (unsigned)REGi(0), (unsigned)REGi(3), (unsigned)REGi(1), (unsigned)REGi(2), (unsigned)REGi(6),
                      (unsigned)REGi(7), (unsigned)REGi(5), (unsigned)cpu->flags, !!(cpu->flags & IF), (unsigned)cpu->cr0,
-                     cpu->halt ? "halted " : "", cpu->intr ? "irq pending" : "");
-    for (int i = 0; i < 16 && n < len - 4; ++i)   // real mode / unpaged: linear = physical
-        n += snprintf(buf + n, len - n, " %02x", lin + i < (uword)cpu->phys_mem_size ? cpu->phys_mem[lin + i] : 0xff);
+                     (unsigned)cpu->cr3, cpu->halt ? "halted " : "", cpu->intr ? "irq pending" : "");
+    for (int i = 0; i < 16 && n < len - 4; ++i) {
+        const int b = t386_lin_peek(cpu, lin + i);
+        n += b < 0 ? snprintf(buf + n, len - n, " --") : snprintf(buf + n, len - n, " %02x", b);
+    }
 }

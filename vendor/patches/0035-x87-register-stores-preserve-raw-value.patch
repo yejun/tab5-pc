@@ -1,0 +1,94 @@
+Preserve the extended-precision source when storing ST(0) to another x87 register.
+
+--- a/fpu.c
++++ b/fpu.c
+@@ -248,15 +248,22 @@
+ 
+ /* FLD m80 and FLD ST(i) keep a value's exact 80 bits in rawst too, and FSTP m80 stores them while no instruction has
+  * written the register since: through a double an 80-bit value lost its low 11 bits of mantissa. */
++static void fpsetraw(FPU *fpu, int i, F80 v)
++{
++	unsigned int idx = (fpu->top + i) & 7;
++	unsigned int mask = 1 << idx;
++	fpu->rawst[idx] = v;
++	fpu->rawtagr &= ~mask;
++	fpu->rawtagw &= ~mask;
++#ifdef T386_FPU_SINGLES
++	fpu->sv &= ~mask;
++#endif
++}
++
+ static void fppushraw(FPU *fpu, F80 v)
+ {
+ 	fpu->top = (fpu->top - 1) & 7;
+-	fpu->rawst[fpu->top] = v;
+-	fpu->rawtagr &= ~(1 << fpu->top);
+-	fpu->rawtagw &= ~(1 << fpu->top);
+-#ifdef T386_FPU_SINGLES
+-	fpu->sv &= ~(1 << fpu->top);
+-#endif
++	fpsetraw(fpu, 0, v);
+ }
+ 
+ static bool fpgetraw(FPU *fpu, int i, F80 *v)
+@@ -266,6 +273,16 @@
+ 		return false;
+ 	*v = fpu->rawst[idx];
+ 	return true;
++}
++
++/* FST/FSTP to a register move its full value, even after a read cached a double. */
++static void fpstore_reg(FPU *fpu, int i)
++{
++	F80 v;
++	if (fpgetraw(fpu, 0, &v))
++		fpsetraw(fpu, i, v);
++	else
++		fpset(fpu, i, fpget(fpu, 0));
+ }
+ 
+ static bool fpgeti64(FPU *fpu, int64_t *res)
+@@ -1054,8 +1071,7 @@
+ 		case 2: // FNOP
+ 			break;
+ 		case 3: // FSTP
+-			temp = fpget(fpu, 0);
+-			fpset(fpu, i, temp);
++			fpstore_reg(fpu, i);
+ 			fppop(fpu);
+ 			break;
+ 		case 4:
+@@ -1311,7 +1327,6 @@
+ 		break;
+ 	}
+ 	case 5: {
+-		double temp;
+ 		switch (group) {
+ 		case 0: // FFREE
+ 			// tw
+@@ -1320,12 +1335,10 @@
+ 			fpxch(fpu, i, 0);
+ 			break;
+ 		case 2: // FST
+-			temp = fpget(fpu, 0);
+-			fpset(fpu, i, temp);
++			fpstore_reg(fpu, i);
+ 			break;
+ 		case 3: // FSTP
+-			temp = fpget(fpu, 0);
+-			fpset(fpu, i, temp);
++			fpstore_reg(fpu, i);
+ 			fppop(fpu);
+ 			break;
+ 		case 4: // FUCOM
+@@ -1374,9 +1387,7 @@
+ 		}
+ 		case 2: // FSTP
+ 		case 3: { // FSTP
+-			double temp;
+-			temp = fpget(fpu, 0);
+-			fpset(fpu, i, temp);
++			fpstore_reg(fpu, i);
+ 			fppop(fpu);
+ 			break;
+ 		}

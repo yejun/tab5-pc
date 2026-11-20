@@ -1,0 +1,87 @@
+--- a/fpu.c
++++ b/fpu.c
+@@ -482,10 +482,63 @@
+ 	return true;
+ }
+ 
+-static bool fpstoref64(void *cpu, int seg, uword addr, double val)
++/* Encode a raw x87 significand directly, so guard and sticky bits survive until
++ * the memory store applies the guest rounding mode. */
++static uint64_t raw_f64_bits(F80 v, unsigned rc)
++{
++	const uint64_t integer = UINT64_C(1) << 63;
++	const uint64_t infinity = UINT64_C(0x7ff) << 52;
++	uint64_t sign = (uint64_t)(v.high >> 15) << 63;
++	uint64_t m = ((uint64_t)v.mant1 << 32) | v.mant0;
++	int exp = v.high & 0x7fff;
++	if (exp && !(m & integer))
++		return UINT64_C(0xfff8000000000000); /* unsupported encoding: indefinite */
++	if (exp == 0x7fff) {
++		uint64_t payload = (m & ~integer) >> 11;
++		if (m != integer)
++			payload |= UINT64_C(1) << 51; /* quiet NaN */
++		return sign | infinity | payload;
++	}
++	if (!m)
++		return sign;
++
++	int biased = exp - 16383 + 1023;
++	bool away = rc == (sign ? 1u : 2u);
++	if (biased >= 2047)
++		return sign | (rc == 0 || away ? infinity : infinity - 1);
++
++	/* For subnormal results, include the extra shift in this same rounding.
++	 * At shift 64 only the top bit reaches halfway; beyond it none can. */
++	int shift = biased > 0 ? 11 : 12 - biased;
++	uint64_t kept = shift < 64 ? m >> shift : 0;
++	uint64_t lost = shift < 64 ? m - (kept << shift) : m;
++	bool increment = away && lost;
++	if (rc == 0 && shift <= 64) {
++		uint64_t half = UINT64_C(1) << (shift - 1);
++		increment = lost > half || (lost == half && (kept & 1));
++	}
++	/* kept includes the implicit bit for normal values. Addition propagates
++	 * a carry across the subnormal/normal and finite/infinity boundaries. */
++	uint64_t base = biased > 0 ? (uint64_t)(biased - 1) << 52 : 0;
++	return sign | (base + kept + increment);
++}
++
++static uint64_t fpstore64_bits(FPU *fpu)
++{
++	F80 raw;
++	unsigned rc = (fpu->cw >> 10) & 3;
++	if (fpgetraw(fpu, 0, &raw))
++		return raw_f64_bits(raw, rc);
++#ifdef USE_FLOAT80
++	return raw_f64_bits(tof80(fpget(fpu, 0)), rc);
++#else
++	union union64 u = { .f = fpget(fpu, 0) };
++	return u.i;
++#endif
++}
++
++static bool fpstoref64(void *cpu, int seg, uword addr, uint64_t v)
+ {
+-	union union64 u = { .f = val };
+-	uint64_t v = u.i;
+ 	if (!cpu_store32(cpu, seg, addr, v))
+ 		return false;
+ 	if (!cpu_store32(cpu, seg, addr + 4, v >> 32))
+@@ -811,15 +864,13 @@
+ 			break;
+ 		}
+ 		case 2: { // FST float64
+-			a = fpget(fpu, 0);
+-			if (!fpstoref64(cpu, seg, addr, a)) {
++			if (!fpstoref64(cpu, seg, addr, fpstore64_bits(fpu))) {
+ 				return false;
+ 			}
+ 			break;
+ 		}
+ 		case 3: { // FSTP float64
+-			a = fpget(fpu, 0);
+-			if (!fpstoref64(cpu, seg, addr, a)) {
++			if (!fpstoref64(cpu, seg, addr, fpstore64_bits(fpu))) {
+ 				return false;
+ 			}
+ 			fppop(fpu);

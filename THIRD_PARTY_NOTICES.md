@@ -12,9 +12,9 @@ sources at the versions given. This list was put together with care, but it is n
 | `firmware/tab5_386/lv_conf.h` | LVGL's `lv_conf_template.h` (v9.5.0), with this project's settings | MIT | (c) 2025 LVGL Kft | `LICENSES/MIT-LVGL.txt` |
 | `firmware/tab5_386/keyboard.h` (the key table `KBD_BASE`) | HID codes of the Tab5 Keyboard's keys, from [M5Unit-KEYBOARD](https://github.com/m5stack/M5Unit-KEYBOARD) | MIT | (c) 2025 M5Stack Technology CO LTD | `LICENSES/MIT-M5Unit-KEYBOARD.txt` |
 | `firmware/tab5_386/src/t386_fast.h`, `t386_fast_ops.h`, `t386_fast_pd.h`, `t386_fast_pd_ops.h`, `t386_jit.h`, `t386_fpu_jit.h` | built on tiny386's internal definitions; `cpui386_step` adapted from tiny386's `i386.c` (those parts) | BSD-3-Clause | (c) 2024-2025 Chunhui He | `LICENSES/BSD-3-Clause-tiny386.txt` |
-| `vendor/patches/0005`, `0006`, `0007`, `0009`-`0015`, `0021`, `0022`, `0025` (`pc.c`), `0026`, `0027` (`pc.c`), `0028`-`0030` | changes to tiny386's `i386.c`, `fpu.c`, `pc.c` (with their code as context) | BSD-3-Clause | (c) 2024-2025 Chunhui He | `LICENSES/BSD-3-Clause-tiny386.txt` |
-| `vendor/patches/0002`-`0004` (`vga.c`), `0005` (`i8257.c`), `0007` (`i8254.c`), `0021` (`ide.c`, `ide.h`), `0022` (`i8042.c`, `i8042.h`), `0023`, `0024` (`ide.c`), `0025` (`ide.c`, `ide.h`) | changes to tiny386 files from QEMU (with their code as context) | MIT | `vga.c`, `i8254.c`, `ide.c`, `i8042.c`: (c) 2003-2017 / 2003-2004 / 2003-2016 / 2003 Fabrice Bellard; `i8257.c`: (c) 2003-2004 Vassili Karpov (malc) | `LICENSES/MIT-tiny386-QEMU.txt` |
-| `vendor/patches/0027` (`seabios/patch`) | a change to tiny386's patch of SeaBIOS (its `src/misc.c`, with SeaBIOS's code as context) | LGPL-3.0 | SeaBIOS's authors (Kevin O'Connor and others) | `LICENSES/LGPL-3.0.txt`, with `LICENSES/GPL-3.0.txt` |
+| `vendor/patches/0005`, `0006`, `0007`, `0009`-`0015`, `0021`, `0022`, `0025` (`pc.c`), `0026`, `0027` (`pc.c`), `0028`, `0029`, `0031`, `0035`-`0043` | changes to tiny386's `i386.c`, `fpu.c`, `pc.c` (with their code as context) | BSD-3-Clause | (c) 2024-2025 Chunhui He | `LICENSES/BSD-3-Clause-tiny386.txt` |
+| `vendor/patches/0002`-`0004` (`vga.c`), `0005` (`i8257.c`), `0007` (`i8254.c`), `0021` (`ide.c`, `ide.h`), `0022` (`i8042.c`, `i8042.h`), `0024` (`ide.c`), `0025` (`ide.c`, `ide.h`), `0032` (`ide.c`), `0033` (`i8254.c`) | changes to tiny386 files from QEMU (with their code as context) | MIT | `vga.c`, `i8254.c`, `ide.c`, `i8042.c`: (c) 2003-2017 / 2003-2004 / 2003-2016 / 2003 Fabrice Bellard; `i8257.c`: (c) 2003-2004 Vassili Karpov (malc) | `LICENSES/MIT-tiny386-QEMU.txt` |
+| `vendor/patches/0027`, `0034` (`seabios/patch`) | changes to tiny386's patch of SeaBIOS (its `src/misc.c` and `src/kbd.c`, with SeaBIOS's code as context) | LGPL-3.0 | SeaBIOS's authors (Kevin O'Connor and others) | `LICENSES/LGPL-3.0.txt`, with `LICENSES/GPL-3.0.txt` |
 | `vendor/patches/esp-hosted/0001-sdio-rx-without-asserts.patch` | a change to ESP-Hosted's `sdio_drv.c` (with its code as context); it also adds a notice of the change to the file | Apache-2.0 | (c) 2024-2026 Espressif Systems (Shanghai) CO LTD | `LICENSES/Apache-2.0.txt` |
 | `docs/images/fd-progress.png` | a screenshot of FreeDOS 1.4's installer running in this emulator | the shown software's own (FreeDOS: GPL and other free licenses) | their authors | see [freedos.org](https://www.freedos.org/) |
 | `docs/images/linux-boot.png` | a screenshot of Sprig Linux starting in this emulator: the Linux kernel's messages and its boot logo (the penguin, Tux, by Larry Ewing), BusyBox | GPL-2.0 (the kernel and its logo, BusyBox) | the Linux kernel's and BusyBox's authors | see [kernel.org](https://www.kernel.org/), [Sprig Linux](https://github.com/yejun/sprig-linux) |
@@ -28,7 +28,7 @@ toolchain provides the rest. A compiled firmware image contains all of it. The r
 `tab5-pc-<version>-NOTICES.txt` (all the notices and license texts) and `tab5-pc-<version>-source.tar.gz` (the
 corresponding source, including the LGPL parts); see [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md).
 
-**[tiny386](https://github.com/hchunhui/tiny386)** at `vendor/tiny386.commit` (2c1205cf1212), with `vendor/patches`.
+**[tiny386](https://github.com/hchunhui/tiny386)** at `vendor/tiny386.commit` (c74cb7109424), with `vendor/patches`.
 Its README states: "The cpu emulator and the project as a whole are both licensed under the BSD-3-Clause license.
 Adlib emulation is an optional part of the project, and it requires the library fmopl which is licensed under the
 LGPL. [...] SeaBIOS is distributed under the GNU LGPL-3 license. Some parts ported from QEMU/TinyEMU are under the
@@ -46,7 +46,7 @@ MIT license." The files the firmware compiles (through `firmware/tab5_386/src/t3
 
 **SeaBIOS and its VGA BIOS** (LGPL-3.0), built into the firmware as data (`tools/gen_bios.sh`). The images are
 pinned in `vendor/bios.lock`: SeaBIOS rel-1.17.0-20-g81ec9ec0 (coreboot/seabios 81ec9ec0bcf4) with tiny386's
-`seabios/patch` (as `vendor/patches/0027` changes it) and `seabios/config`. `tools/build_seabios.sh` builds them from
+`seabios/patch` (as `vendor/patches/0027` and `0034` change it) and `seabios/config`. `tools/build_seabios.sh` builds them from
 that source (the BIOS is built so by `tools/fetch_vendor.sh`; the VGA BIOS is tiny386's release image).
 
 **[ESP-Hosted](https://github.com/espressif/esp-hosted-mcu)**, the SDIO host driver at `vendor/esp-hosted.commit`

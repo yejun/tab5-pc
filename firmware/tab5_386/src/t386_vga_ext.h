@@ -484,9 +484,14 @@ static inline void t386_vga_text_put(VGAState* s, uint32_t a, uint32_t v) {   //
     if (s->sr[VGA_SEQ_PLANE_WRITE] & (1 << plane)) s->vga_ram[((a & ~1) << 1) | plane] = v;
 }
 
+// Writes to the window's first byte from here and from REP MOVS / STOS (t386_jit.h, jit_h_repio): a program that
+// draws in its own memory and copies the picture to the screen does one a frame (serial "S": screen copies).
+uint32_t t386_screen_copies;
+
 int t386_vga_write_fast(uint32_t off, int size, uint32_t v) {
     VGAState* s = t386_vga;
     if (!s || !(s->msr & MSR_RAM_ENABLE)) return 0;
+    if (!off) t386_screen_copies++;
     uint32_t a;
     if (t386_vga_text_at(s, off, size, &a)) {
         for (int i = 0; i < size; i++, v >>= 8) t386_vga_text_put(s, a + i, v & 0xff);
@@ -582,7 +587,22 @@ int t386_vga_read_fast(uint32_t off, int size, uint32_t* out) {
 // vga_step for a read of the status register (t386_pc.c). Its deadlines compare in half the range of the 32-bit
 // microsecond clock: after some 36 minutes without one (a paused guest), the last would look that far ahead, and the
 // retrace stand still as long. Nothing is more than an interval ahead: one that is starts from now.
+//
+// Horizontal blanking too: tiny386's bit 0 (display disabled) is set only around the vertical retrace, once every
+// 6.7 ms here, where a VGA sets it at the end of every line, 31.5 thousand times a second. A program that waits for
+// it before each write, to keep from disturbing the picture, waited 6.7 ms each time: a 3D game sets its
+// palette two colours a wait, 128 waits, 0.85 s for every change of palette (a flash for something picked up, a
+// fade), and spent half of its demo waiting; text programs with CGA snow checking do the same for every character.
+// So between vertical retraces the bit follows the clock: set for the last 6 of every 32 microseconds, a VGA's line
+// of 31.8 with 6.4 of blanking. (One read of the clock for all of it: a read is most of what this costs.)
 int t386_vga_step(VGAState* s) {
-    if ((int32_t)(s->retrace_time - get_uticks()) > RETRACE_INTERVAL_US) s->retrace_time = get_uticks();
-    return vga_step(s);
+    const uint32_t now = get_uticks();
+    int ret = 0;
+    if ((int32_t)(s->retrace_time - now) > RETRACE_INTERVAL_US) s->retrace_time = now;
+    if (after_eq(now, s->retrace_time)) ret = vga_step(s);   // (its own read of the clock: at a phase's end only)
+    if (s->retrace_phase == 0) {
+        if ((now & 31) >= 26) s->st01 |= ST01_DISP_ENABLE;
+        else s->st01 &= ~ST01_DISP_ENABLE;
+    }
+    return ret;
 }

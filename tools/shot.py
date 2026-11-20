@@ -5,6 +5,7 @@
     tools/shot.py out.png [--port PORT] [--panel [--rot 1|3]]
 """
 import argparse
+import re
 import time
 
 import numpy as np
@@ -40,7 +41,7 @@ def main():
             Image.fromarray(np.ascontiguousarray(rgb)).save(args.out)
             print(f"saved {args.out}")
             return
-        print("the picture came over garbled (checksum differs), again")
+        print("incomplete or garbled picture, retrying")
     raise SystemExit("no picture came over whole")
 
 
@@ -55,22 +56,32 @@ def grab(s, args):
             break
     else:
         raise SystemExit("no frame buffer header from the Tab5")
-    w, h, n = map(int, line.split()[1:])
-    data, end = b"", time.monotonic() + 30
+    header = re.fullmatch(r"FB (\d{1,5}) (\d{1,5}) (\d{1,8})", line)
+    if not header:
+        return None
+    w, h, n = map(int, header.groups())
+    if not (w and h and n == w * h * 2 and n <= 720 * 1280 * 2):
+        return None
+    data, end = bytearray(), time.monotonic() + 10
     while len(data) < n and time.monotonic() < end:
-        data += s.read(n - len(data))
+        got = s.read(n - len(data))
+        if got:   # (a busy guest slows the transfer to ~60 KB/s: give up only when nothing more comes)
+            data.extend(got)
+            end = time.monotonic() + 10
     if len(data) != n:
-        raise SystemExit(f"short read: {len(data)} of {n} bytes")
+        return None
     end = time.monotonic() + 5
     while time.monotonic() < end:   # the Tab5's checksum of what it sent (t386_mix)
         line = s.readline().decode(errors="replace").strip()
         if line.startswith("SUM "):
-            if int(line[4:], 16) != mix(data):
-                print(s.readline().decode(errors="replace").strip())
+            if not re.fullmatch(r"SUM [0-9a-fA-F]{8}", line) or int(line[4:], 16) != mix(data):
                 return None
             break
+    else:
+        return None
     px = np.frombuffer(data, "<u2").reshape(h, w)
-    rgb = np.stack([(px >> 11) << 3, ((px >> 5) & 63) << 2, (px & 31) << 3], axis=2).astype(np.uint8)
+    r, g, b = px >> 11, (px >> 5) & 63, px & 31
+    rgb = np.stack([r << 3 | r >> 2, g << 2 | g >> 4, b << 3 | b >> 2], axis=2).astype(np.uint8)
     if args.panel:   # rotation 1 maps landscape (x, y) to panel (719 - y, x); rotation 3 to (y, 1279 - x)
         rgb = np.rot90(rgb, 1) if args.rot == 1 else np.rot90(rgb, -1)
     return rgb

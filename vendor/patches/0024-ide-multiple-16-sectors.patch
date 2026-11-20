@@ -3,6 +3,8 @@ drive's maximum and takes an interrupt and a PIO transfer per block: 4x fewer of
 writes. io_buffer grows to 8 KB + 4 per drive (in the 640K-768K device state: the Linux machine used 71 of
 131 KB before). The BIOS (READ/WRITE SECTORS, a sector per block) is unaffected.
 
+diff --git a/ide.c b/ide.c
+index ae1781c..1d55058 100644
 --- a/ide.c
 +++ b/ide.c
 @@ -303,7 +303,7 @@
@@ -11,6 +13,6 @@ writes. io_buffer grows to 8 KB + 4 per drive (in the 640K-768K device state: th
  
 -#define MAX_MULT_SECTORS 4 /* 512 * 4 == 2048 */
 +#define MAX_MULT_SECTORS 16 /* 512 * 16 == 8192 (READ/WRITE MULTIPLE: an interrupt per block) */
- /* a write command's blocks are gathered, up to this many sectors, and written together */
- #define WRITE_GATHER_SECTORS 128
- 
+ #ifdef IDE_ENABLE_WRITE_GATHER
+ /* a write command's blocks are gathered, up to this many sectors, and written together
+    (a buffer of that many sectors, 64 KB, allocated on the first write: not for small MCUs) */

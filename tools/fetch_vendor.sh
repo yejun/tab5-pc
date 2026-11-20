@@ -12,9 +12,12 @@ if [[ ! -d tiny386/.git ]]; then
   git clone https://github.com/hchunhui/tiny386 tiny386
 fi
 git -C tiny386 fetch --depth 1 origin "$COMMIT" 2>/dev/null || git -C tiny386 fetch origin
-git -C tiny386 checkout -q "$COMMIT"
+# (the files as tiny386 has them first: patches from an earlier run, or an earlier pin's, are taken out, and a
+# patch that doesn't apply stops the script. Skipped, as it once was, the build went on without it.)
+git -C tiny386 checkout -q -f "$COMMIT"
 for p in patches/*.patch; do   # fixes of our own (see each patch)
-  git -C tiny386 apply --check "../$p" 2>/dev/null && git -C tiny386 apply "../$p" && echo "applied $p"
+  git -C tiny386 apply "../$p" || { echo "$p does not apply to tiny386 $COMMIT" >&2; exit 1; }
+  echo "applied $p"
 done
 make -C tiny386 prepare HOSTCC=${HOSTCC:-cc}
 if [[ "${BIOS_FROM_SOURCE:-0}" == 1 ]]; then

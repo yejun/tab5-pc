@@ -3,14 +3,14 @@ while a refresh running alongside (on another core) may be drawing into it. (Cle
 size is upstream's since 9eca597.)
 
 diff --git a/vga.c b/vga.c
-index c739fed..1dbbc22 100644
+index 137fb96..52041cd 100644
 --- a/vga.c
 +++ b/vga.c
-@@ -783,7 +783,8 @@ static void vbe_update_vgaregs(VGAState *s)
+@@ -815,7 +815,8 @@ static void vbe_update_vgaregs(VGAState *s)
      s->gr[VGA_GFX_MODE] = (s->gr[VGA_GFX_MODE] & ~0x60) |
          (shift_control << 5);
      s->cr[VGA_CRTC_MAX_SCAN] &= ~0x9f; /* no double scan */
--    simplefb_clear(s->fb_dev);
+-    vga_clear_screen(s);
 +    s->last_gw = -2;    /* the next refresh clears the frame buffer (not here: from the CPU's thread, while a
 +                           refresh may be drawing into it) */
  }

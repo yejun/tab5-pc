@@ -1,0 +1,42 @@
+The BIOS's check for a key (INT 16h, AH = 01h and 11h) returned with the interrupt flag as its caller had pushed
+it: SeaBIOS returns from its services by IRET. The PC's and the AT's BIOS turn interrupts on when they are entered
+and return from these two with RET 2, the flags being the answer (ZF): the caller gets them back enabled, whatever
+it came with. DOS's power manager counts on that. It takes INT 16h, is entered with interrupts off as any
+interrupt handler, calls the BIOS (PUSHF, CALL FAR), and returns to the program with the flags the BIOS gave it
+(PUSHF ... POPF, RETF 2): with SeaBIOS, interrupts off. A program that asks for a key and then waits for a timer
+tick by HLT stops there for good: a DOS benchmark in its continuous mode, after its first score (the same in QEMU
+with its SeaBIOS). Now the two functions set IF in the flags they return. (vendor/bios.bin is built with it:
+tools/build_seabios.sh.)
+
+diff --git a/seabios/patch b/seabios/patch
+--- a/seabios/patch
++++ b/seabios/patch
+@@ -210,6 +210,28 @@
+  }
+  
+  // Write a character to the special debugging port.
++diff --git a/src/kbd.c b/src/kbd.c
++index 15e5ae78..9da583c4 100644
++--- a/src/kbd.c
+++++ b/src/kbd.c
++@@ -124,6 +124,9 @@ static void
++ handle_1601(struct bregs *regs)
++ {
++     dequeue_key(regs, 0, 0);
+++    // (tiny386) As the PC's and the AT's BIOS: it returns with interrupts on (STI on entry, RET 2 for the flags).
+++    // A caller may count on it: DOS's power manager passes the flags it gets back on to the program.
+++    regs->flags |= F_IF;
++ }
++ 
++ // get shift flag status
++@@ -183,6 +186,7 @@ static void
++ handle_1611(struct bregs *regs)
++ {
++     dequeue_key(regs, 0, 1);
+++    regs->flags |= F_IF;   // (tiny386: as handle_1601)
++ }
++ 
++ // get extended keyboard status
+ diff --git a/src/misc.c b/src/misc.c
+ index b5117304..9cdc6d08 100644
+ --- a/src/misc.c

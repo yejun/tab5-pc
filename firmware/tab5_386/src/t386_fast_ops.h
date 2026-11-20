@@ -1044,11 +1044,11 @@ FL(op_bt): { u8 b = pc[-1]; u8 m = *pc++; int r = (m >> 3) & 7, rm = m & 7;
 		uword off = fast_ea(cpu, &pc, m, adsz16, &seg);
 		u8 *p;
 		if (opsz16) {
-			off += lreg16(r) / 16 * 2;
+			off = bit_string_addr(off, (s16) lreg16(r), 16, adsz16);
 			FPTR(p, seg, off, 2, b != 0xa3);
 			BT_OPS(w, p, r, fm16, fs16, lreg16, sreg16)
 		} else {
-			off += lreg32(r) / 32 * 4;
+			off = bit_string_addr(off, (s32) lreg32(r), 32, adsz16);
 			FPTR(p, seg, off, 4, b != 0xa3);
 			BT_OPS(d, p, r, fm32, fs32, lreg32, sreg32)
 		}

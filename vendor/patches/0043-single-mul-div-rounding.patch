@@ -1,0 +1,53 @@
+--- a/fpu.c
++++ b/fpu.c
+@@ -503,6 +503,41 @@
+ 	return fpprec(fpu, sum.f);
+ }
+ 
++/* FMUL, FDIV or FDIVR at PC=24. Only a binary64 value on a rounding
++ * boundary can have lost which side the exact result lies on. Normalize
++ * extreme results too, so host underflow cannot discard significant bits. */
++static double fpproduct24(FPU *fpu, int group, double a, double b, double x)
++{
++	union union64 result = { .f = x };
++	unsigned exp = (result.i >> 52) & 0x7ff;
++	if (exp > 1 && exp < 0x7ff && (result.i & 0xfffffff))
++		return fpprec(fpu, x);
++	if (!isfinite(a) || !isfinite(b) || a == 0 || b == 0)
++		return x;
++
++	int ea, eb;
++	bool mul = group == 1;
++	double left = frexp(fabs(group == 7 ? b : a), &ea);
++	double right = frexp(fabs(group == 7 ? a : b), &eb);
++	union union64 scaled = { .f = mul ? left * right : left / right };
++	if ((scaled.i & 0xfffffff) == 0) {
++		/* In units of 2^-53 the operands, and a 24-bit value or midpoint,
++		 * are integers. Compare left*right with scaled for a product, or
++		 * left with scaled*right for a quotient, in units of 2^-106.
++		 * The exact difference is at most half a binary64 ulp times 2^106
++		 * (less than 2^54 here). Its low 64 bits therefore give its sign,
++		 * even though the individual products wrap. */
++		uint64_t l = (uint64_t) (left * 0x1p53);
++		uint64_t r = (uint64_t) (right * 0x1p53);
++		uint64_t c = (uint64_t) (scaled.f * 0x1p53);
++		uint64_t diff = mul ? l * r - (c << 53) : (l << 53) - c * r;
++		if (diff)
++			scaled.i = (diff >> 63) ? scaled.i - 1 : scaled.i + 1;
++	}
++	double rounded = fpprec(fpu, copysign(scaled.f, x));
++	return ldexp(rounded, mul ? ea + eb : ea - eb);
++}
++
+ /* a NaN result as the x87 makes it: an operand's NaN, made quiet, or the "real indefinite" (negative) one (hosts
+    give their own: RISC-V's is positive, without the operand's sign) */
+ static double fpnan(double c, double a, double b)
+@@ -727,7 +762,7 @@
+ 			if (group == 0 || group == 4 || group == 5)
+ 				c = fpsum24(fpu, group, a, b, c);
+ 			else
+-				c = fpprec(fpu, c);
++				c = fpproduct24(fpu, group, a, b, c);
+ 		}
+ 		fpset(fpu, d, c);
+ 	}

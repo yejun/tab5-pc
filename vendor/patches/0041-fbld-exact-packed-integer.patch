@@ -1,0 +1,60 @@
+--- a/fpu.c
++++ b/fpu.c
+@@ -403,7 +403,7 @@
+ 	return b - (6 * (b >> 4));
+ }
+ 
+-static bool fploadbcd(void *cpu, int seg, uword addr, double *res)
++static bool fploadbcd(FPU *fpu, void *cpu, int seg, uword addr)
+ {
+ 	u32 lo, mi;
+ 	u16 hi;
+@@ -414,26 +414,15 @@
+ 	if(!cpu_load16(cpu, seg, addr + 8, &hi))
+ 		return false;
+ 
+-	uint64_t val = 0;
+-	int sign = hi & 0x8000;
+-	hi &= 0x7FFF;
+-	uint64_t base = 1;
+-	for (int i = 0; i < 4; i++) {
+-		val += base * bcd100(lo);
+-		lo >>= 8;
+-		base *= 100;
+-	}
+-	for (int i = 0; i < 4; i++) {
+-		val += base * bcd100(mi);
+-		mi >>= 8;
+-		base *= 100;
+-	}
+-	for (int i = 0; i < 2; i++) {
+-		val += base * bcd100(hi);
+-		hi >>= 8;
+-		base *= 100;
+-	}
+-	*res = copysign(val, sign ? -1.0 : 1.0);
++	/* Nine digit pairs, most significant pair at byte 8. The last byte
++	 * contains only the sign. All 18 digits fit in the x87 significand. */
++	uint64_t val = bcd100(hi);
++	for (int shift = 24; shift >= 0; shift -= 8)
++		val = val * 100 + bcd100(mi >> shift);
++	for (int shift = 24; shift >= 0; shift -= 8)
++		val = val * 100 + bcd100(lo >> shift);
++	fppushi64(fpu, val);
++	fpu->rawst[fpu->top].high |= hi & 0x8000;  /* includes negative zero */
+ 	return true;
+ }
+ 
+@@ -1025,10 +1014,8 @@
+ 			break;
+ 		}
+ 		case 4: { // FBLD
+-			if (!fploadbcd(cpu, seg, addr, &a)) {
+-				return false;
+-			}
+-			fppush(fpu, a);
++			if (!fploadbcd(fpu, cpu, seg, addr))
++				return false;
+ 			break;
+ 		}
+ 		case 5: { // FILD int64

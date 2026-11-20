@@ -1,0 +1,23 @@
+INVLPG emptied the whole TLB (tlb_clear), as a MOV to CR3 does. Linux runs one for every page it copies on a write
+after a fork, and for small ranges it unmaps or protects; a build with a TLB of its own, and with a translator that
+keeps entries by linear address, lost all of those each time too. A build can now define T386_INVLPG(cpu, linear
+address) and drop just that page's entries (firmware/tab5_386/src/t386_fast.h, t386_invlpg). Without the define,
+nothing changes.
+
+diff --git a/i386.c b/i386.c
+index 32cb743..c58b86c 100644
+--- a/i386.c
++++ b/i386.c
+@@ -3825,7 +3825,12 @@ static bool verrw_helper(CPUI386 *cpu, int sel, int wr, int *zf)
+ #define XADDw(...) XADD_helper(16, __VA_ARGS__)
+ #define XADDd(...) XADD_helper(32, __VA_ARGS__)
+ 
++/* INVLPG: T386_INVLPG(cpu, linear address), a build's own (just that page's entry, in a TLB of its own too) */
++#ifdef T386_INVLPG
++#define INVLPG(addr) T386_INVLPG(cpu, cpu->seg[curr_seg].base + (addr));
++#else
+ #define INVLPG(addr) tlb_clear(cpu);
++#endif
+ 
+ #define BSWAPw(a, la, sa) THROW0(EX_UD);
+ 

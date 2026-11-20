@@ -7,10 +7,10 @@ On tiny386 since 7fd4d05 and 2c1205c the keyboard's scancode translation state (
 mouse's packet left over for lack of room go back to nothing too.
 
 diff --git a/i8042.c b/i8042.c
-index 754ad40..5b59bbd 100644
+index 7148fca..2ab5a14 100644
 --- a/i8042.c
 +++ b/i8042.c
-@@ -1087,3 +1087,60 @@ PS2MouseState *ps2_mouse_init(void (*update_irq)(void *, int), void *update_arg)
+@@ -1100,3 +1100,60 @@ PS2MouseState *ps2_mouse_init(void (*update_irq)(void *, int), void *update_arg)
      ps2_reset(&s->common);
      return s;
  }
@@ -84,7 +84,7 @@ index 7282d45..168bfaa 100644
  uint32_t kbd_read_status(void *opaque, uint32_t addr);
  void kbd_write_command(void *opaque, uint32_t addr, uint32_t val);
 diff --git a/pc.c b/pc.c
-index 5222c20..699738b 100644
+index 6f86f1d..99e75e7 100644
 --- a/pc.c
 +++ b/pc.c
 @@ -599,6 +599,7 @@ void pc_step(PC *pc)

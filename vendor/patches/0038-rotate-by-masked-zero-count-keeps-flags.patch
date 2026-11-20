@@ -1,0 +1,20 @@
+--- a/i386.c
++++ b/i386.c
+@@ -1920,7 +1920,7 @@
+ 		res = sext ## BIT((x << y) | (x >> (BIT - y))); \
+ 		sa(a, res); \
+ 	} \
+-	if (y0) { \
++	if (y0 & 0x1f) { /* only the count's low 5 bits: by 32, 64... nothing changes */ \
+ 		int cf1 = res & 1; \
+ 		int of1 = (res >> (sizeof(uword) * 8 - 1)) ^ cf1; \
+ 		SET_BIT(cpu->flags, cf1, CF); \
+@@ -1977,7 +1977,7 @@
+ 		res = sext ## BIT((x >> y) | (x << (BIT - y))); \
+ 		sa(a, res); \
+ 	} \
+-	if (y0) { \
++	if (y0 & 0x1f) { /* only the count's low 5 bits: by 32, 64... nothing changes */ \
+ 		int cf1 = (res >> (BIT - 1)) & 1; \
+ 		int of1 = ((res ^ (res << 1)) >> (BIT - 1)) & 1; \
+ 		SET_BIT(cpu->flags, cf1, CF); \

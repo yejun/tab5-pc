@@ -3,9 +3,10 @@ another maker's: a DOS system information program named the 486 a Cyrix. Now it 
 models (its 486 among them) report; the family and features stay as they were.
 
 diff --git a/i386.c b/i386.c
+index 1ea48b7..32cb743 100644
 --- a/i386.c
 +++ b/i386.c
-@@ -3858,10 +3858,10 @@
+@@ -3859,10 +3859,10 @@ static bool verrw_helper(CPUI386 *cpu, int sel, int wr, int *zf)
  #define CPUID() \
  	switch (REGi(0)) { \
  	case 0: \

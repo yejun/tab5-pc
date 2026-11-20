@@ -2,6 +2,7 @@ Registers kept as singles: a host's quick ways for single precision (the Tab5 fi
 single-precision FPU) keep a register's value as an exact single in sb[], so that it isn't converted to a double
 and back by each instruction; fpget makes the double when tiny386's code reads it (the single kept: the same
 value), fpset and FRSTOR forget the single, FNSAVE makes the doubles first; FXCH and FILD m64 (which keep raw values) swap or forget it too.
+
 diff --git a/fpu.c b/fpu.c
 index 3e89ce7..cab3d1e 100644
 --- a/fpu.c

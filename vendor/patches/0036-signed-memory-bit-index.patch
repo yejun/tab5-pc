@@ -1,0 +1,37 @@
+Use a signed register index for memory BT, BTS, BTR and BTC.
+
+--- a/i386.c
++++ b/i386.c
+@@ -1263,6 +1263,14 @@
+ #define Eb(...) E_helper(8, , __VA_ARGS__)
+ #define Ev(...) if (opsz16) { E_helper(16, w, __VA_ARGS__) } else { E_helper(32, d, __VA_ARGS__) }
+ 
++/* Register indices into memory bit strings are signed. Align before dividing
++ * so that -1 addresses the previous word/dword, then wrap the effective offset. */
++static inline uword bit_string_addr(uword addr, sword index, int bits, bool adsz16)
++{
++	addr += (index & -bits) / 8;
++	return adsz16 ? (u16) addr : addr;
++}
++
+ #define EG_helper(PM, BT, BIT, SUFFIX, rwm, INST) \
+ 	TRY(fetch8(cpu, &modrm)); \
+ 	int reg = (modrm >> 3) & 7; \
+@@ -1273,7 +1281,7 @@
+ 		INST ## SUFFIX(rm, reg, lreg ## BIT, sreg ## BIT, lreg ## BIT, sreg ## BIT) \
+ 	} else { \
+ 		TRY(modsib(cpu, adsz16, mod, rm, &addr, &curr_seg)); \
+-		if (BT) addr += lreg ## BIT(reg) / BIT * (BIT / 8); \
++		if (BT) addr = bit_string_addr(addr, (s ## BIT) lreg ## BIT(reg), BIT, adsz16); \
+ 		TRY(translate ## BIT(cpu, &meml, rwm, curr_seg, addr)); \
+ 		INST ## SUFFIX(&meml, reg, laddr ## BIT, saddr ## BIT, lreg ## BIT, sreg ## BIT) \
+ 	}
+@@ -2228,7 +2236,7 @@
+ #define BTX_helper(BIT, OP, a, b, la, sa, lb, sb) \
+ 	int bb = lb(b) % BIT; \
+ 	bool bit = (la(a) >> bb) & 1; \
+-	sa(a, la(a) OP (1 << bb)); \
++	sa(a, la(a) OP (1u << bb)); \
+ 	cpu->cc.mask &= ~CF; \
+ 	SET_BIT(cpu->flags, bit, CF);
+ 

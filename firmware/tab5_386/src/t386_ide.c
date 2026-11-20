@@ -473,6 +473,8 @@ void t386_ram_written(uint32_t addr, int len);   // the bus master's DMA into gu
 #define ftello t386_ftello
 #define fread t386_fread
 #define fwrite t386_fwrite
+// (write gathering, in tiny386 behind this since its a3099a9; the bus master's DMA uses its buffer)
+#define IDE_ENABLE_WRITE_GATHER
 #include "ide.c"
 #undef fopen
 #undef fclose

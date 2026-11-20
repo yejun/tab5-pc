@@ -1,0 +1,72 @@
+A command written for the second drive of a channel that has only the first one was ignored and the Status
+register read 00h for ever after: the first of the two ways ATA-3 gives a lone Device 0 ("Single device
+configurations, Device 0 only"). A driver that probes both drives with IDENTIFY DEVICE and tells a missing one
+by the error bit then waits its whole timeout for DRQ: a 32-bit protected-mode disk driver takes a second for
+each channel at every start, two seconds with a disk and a CD drive, to learn what the error bit says at once.
+Now the second way: the channel keeps a Status and an Error register for the missing drive; a command for it
+other than EXECUTE DEVICE DIAGNOSTIC and INITIALIZE DEVICE PARAMETERS sets ERR in the one and ABRT in the
+other (Status reads 01h), a reset or a write of the drive select register clears them. No interrupt is raised
+(the standard's second way raises one when nIEN is clear; none came before either, and a driver that waits
+for one does as it did). A channel with no drive at all, or with the second drive only, is unchanged, and so
+are the registers a detection reads (sector count, LBA: 00h), so nothing new is found.
+
+diff --git a/ide.c b/ide.c
+index 02bc12a..e83c61f 100644
+--- a/ide.c
++++ b/ide.c
+@@ -397,6 +397,8 @@ struct IDEIFState {
+     uint8_t bm_cmd, bm_status;
+     uint32_t bm_prd;
+     IDEState *dma_drive;
++    /* the Status and Error registers the first drive keeps for a second one that is not there */
++    uint8_t nodrive_status, nodrive_error;
+ };
+ 
+ static void ide_sector_read_cb(void *opaque, int ret);
+@@ -1871,6 +1873,7 @@ void ide_ioport_write(void *opaque, uint32_t addr, uint32_t val)
+         if (s) {
+             s->select = val;
+         }
++        s1->nodrive_status = s1->nodrive_error = 0;
+         break;
+     default:
+     case 7:
+@@ -1880,6 +1883,12 @@ void ide_ioport_write(void *opaque, uint32_t addr, uint32_t val)
+                 ide_exec_cmd(s, val);
+             else
+                 idecd_exec_cmd(s, val);
++        } else if (s1->drives[0] && val != WIN_DIAGNOSE && val != WIN_SPECIFY) {
++            /* a command for the second drive, and only the first is there: aborted (ATA-3, "Device 0 only
++               configurations": the way where Device 0 keeps Status and Error registers for Device 1; without
++               its interrupt) */
++            s1->nodrive_status = ERR_STAT;
++            s1->nodrive_error = ABRT_ERR;
+         }
+         break;
+     }
+@@ -1892,7 +1901,7 @@ uint32_t ide_ioport_read(void *opaque, uint32_t addr)
+     int ret;
+ 
+     if (!s) {
+-        ret = 0x00;
++        ret = addr == 7 ? s1->nodrive_status : addr == 1 ? s1->nodrive_error : 0x00;
+     } else {
+         switch(addr) {
+         case 0:
+@@ -1938,7 +1947,7 @@ uint32_t ide_status_read(void *opaque)
+     if (s) {
+         ret = s->status;
+     } else {
+-        ret = 0;
++        ret = s1->nodrive_status;
+     }
+ #ifdef DEBUG_IDE
+     printf("ide: read status=0x%02x\n", ret);
+@@ -1966,6 +1975,7 @@ void ide_cmd_write(void *opaque, uint32_t val)
+             }
+         }
+         s1->dma_drive = NULL;
++        s1->nodrive_status = s1->nodrive_error = 0;
+     } else if ((s1->cmd & IDE_CMD_RESET) && !(val & IDE_CMD_RESET)) {
+         /* high to low */
+         for(i = 0; i < 2; i++) {

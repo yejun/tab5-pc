@@ -5,7 +5,7 @@ Beside tiny386's own tlb_gen (counted there for its fast/ path since 2d2e124): t
 translator have their own TLBs and use the hook.
 
 diff --git a/i386.c b/i386.c
-index a3207c3..580a1c6 100644
+index 51908df..1b49ddc 100644
 --- a/i386.c
 +++ b/i386.c
 @@ -21,6 +21,11 @@

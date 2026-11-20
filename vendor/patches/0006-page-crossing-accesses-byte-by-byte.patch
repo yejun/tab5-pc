@@ -1,5 +1,5 @@
 diff --git a/i386.c b/i386.c
-index 674080c..a3207c3 100644
+index 0c6c721..51908df 100644
 --- a/i386.c
 +++ b/i386.c
 @@ -775,8 +775,37 @@ static u8 IRAM_ATTR load8(CPUI386 *cpu, OptAddr *res)

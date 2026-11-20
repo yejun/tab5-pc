@@ -36,8 +36,31 @@ done
 # the BIOS images are built into the firmware, but not kept in the repository (SeaBIOS, LGPL-3): from vendor/*.bin
 B="$SKETCH/src/bios_rom.c"
 [[ -f "$B" && "$B" -nt "$ROOT/vendor/bios.bin" && "$B" -nt "$ROOT/vendor/vgabios.bin" ]] || "$ROOT/tools/gen_bios.sh"
+# The emulator's code is linked to run from PSRAM (tools/xip.ld), its bytes moved into the flash image after the link
+# (tools/xip_patch.py). The link finds "sections.ld" in the directory it runs in before the core's: ours, made from
+# the core's. XIP=0 tools/build.sh builds without, everything in flash as up to 1.7.0 (for comparisons).
+XIPP=()
+if [[ "${XIP:-1}" != 0 ]]; then
+  XIPP=(--build-property "recipe.hooks.linking.prelink.1.pattern=python3 $ROOT/tools/xip_patch.py ld {compiler.sdk.path}/ld/sections.ld {build.path}.ld/sections.ld"
+        --build-property "recipe.hooks.linking.postlink.1.pattern=python3 $ROOT/tools/xip_patch.py {build.path}/{build.project_name}.elf")
+  mkdir -p "$BUILD.ld"
+  cd "$BUILD.ld"
+else
+  rm -rf "$BUILD.ld"
+fi
 arduino-cli compile --fqbn "$FQBN" --build-path "$BUILD" \
-  --build-property "compiler.c.extra_flags=$FLAGS" --build-property "compiler.cpp.extra_flags=$FLAGS" "$SKETCH"
+  --build-property "compiler.c.extra_flags=$FLAGS" --build-property "compiler.cpp.extra_flags=$FLAGS" "${XIPP[@]}" "$SKETCH"
+cd "$ROOT"
+[[ -f "$BUILD/tab5_386.ino.full.elf" && "${XIP:-1}" != 0 ]] || cp "$BUILD/tab5_386.ino.elf" "$BUILD/tab5_386.ino.full.elf"
+# Translated code keeps a host address in tp (t386_jit.h, R_GRP): nothing in the firmware may read it. Only an
+# interrupt's save and restore and the translator's own routine touch it now; thread-local variables would read it.
+# (tools/tp_check.py)
+OBJDUMP=$(ls "$ADATA"/packages/esp32/tools/esp-rv32/*/bin/riscv32-esp-elf-objdump 2>/dev/null | tail -1 || true)
+if [[ -n "$OBJDUMP" ]]; then
+  python3 "$ROOT/tools/tp_check.py" "$OBJDUMP" "$BUILD/tab5_386.ino.full.elf"
+else
+  echo "no objdump found: the firmware's uses of tp were not checked (t386_jit.h, R_GRP)" >&2
+fi
 if [[ "${1:-}" == "upload" ]]; then
   arduino-cli upload --fqbn "$FQBN" --port "$PORT" --input-dir "$BUILD"
 fi

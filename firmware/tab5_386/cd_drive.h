@@ -7,7 +7,7 @@
 
 static int g_cd_drive = -1;          // its place, g_conf.disks' index (-1: none, all four taken by hard disks)
 static char g_cd_path[2][192];       // the disc's image ("": none); g_conf.disks[g_cd_drive] points at one of them,
-static int g_cd_buf = 0;             // the other one written on a change (the web server reads it: pc_uses)
+static int g_cd_buf = 0;             // the other one written on a change (the web server reads it under the disk lock)
 static std::atomic<uint32_t> g_cd_seq{0};   // counts changes (the side panel's tray follows)
 
 // From load_config, after the disks not on the card were left out (a CD image's left in, as ""): the drive's place
@@ -86,7 +86,17 @@ static bool ini_set_pc_key(const String& path, const char* key, const char* valu
 
 // A disc into the drive (path "": the drive emptied), as from the tray. The PC is held for the moment (its IDE state
 // changes; the disc's image is opened on the card). False: no drive, or the image doesn't open (the old disc stays).
+static bool g_cd_busy = false;   // the last cd_change failed for this: the card was busy (the tray says so)
 static bool cd_change(const char* path) {
+  // With the disk lock: a deletion over the web checks which images the PC uses and deletes under it (web.h,
+  // card_dir_deletable), and the disc must not change in between. Not waited for without end: a download holds
+  // the lock for as long as it takes, and this is the touch screen's task (or the serial line's).
+  g_cd_busy = xSemaphoreTake(g_disk_lock, pdMS_TO_TICKS(2000)) != pdTRUE;
+  if (g_cd_busy) {
+    Serial.println("cd: the card is busy with a transfer over Wi-Fi; the disc in the drive stays");
+    return false;
+  }
+  struct Give { ~Give() { xSemaphoreGive(g_disk_lock); } } give;
   if (g_cd_drive < 0 || !g_pc || g_pc_stopped) return false;
   char* next = g_cd_path[g_cd_buf ^ 1];
   snprintf(next, sizeof(g_cd_path[0]), "%s", path);
@@ -95,6 +105,7 @@ static bool cd_change(const char* path) {
   if (ok) {
     g_cd_buf ^= 1;
     g_conf.disks[g_cd_drive] = next;
+    g_web_free_path = String();   // (web.h: the file it last found free may be this disc)
   }
   pc_hold(false);
   if (!ok) {

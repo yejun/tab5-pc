@@ -6,10 +6,10 @@ CD-ROM drives: a disc changed while the PC runs, as a real drive.
   until a REQUEST SENSE, which FreeDOS's UDVD2 never sends (the drive stayed "not ready" for good).
 
 diff --git a/ide.c b/ide.c
-index 4bbbee6..d06fd67 100644
+index 2f5423e..ae1781c 100644
 --- a/ide.c
 +++ b/ide.c
-@@ -353,6 +353,7 @@ struct IDEState {
+@@ -358,6 +358,7 @@ struct IDEState {
      uint8_t sense_key;
      uint8_t asc;
      uint8_t cdrom_changed;
@@ -17,7 +17,7 @@ index 4bbbee6..d06fd67 100644
      int packet_transfer_size;
      int elementary_transfer_size;
      int io_buffer_index;
-@@ -1126,6 +1127,10 @@ static void ide_atapi_cmd_read(IDEState *s, int lba, int nb_sectors,
+@@ -1174,6 +1175,10 @@ static void ide_atapi_cmd_read(IDEState *s, int lba, int nb_sectors,
      printf("read %s: LBA=%d nb_sectors=%d\n", 0 ? "dma" : "pio",
             lba, nb_sectors);
  #endif
@@ -28,7 +28,7 @@ index 4bbbee6..d06fd67 100644
      ide_atapi_cmd_read_pio(s, lba, nb_sectors, sector_size);
  }
  
-@@ -1164,16 +1169,19 @@ static void ide_atapi_cmd(IDEState *s)
+@@ -1212,16 +1217,19 @@ static void ide_atapi_cmd(IDEState *s)
      }
  #endif
      /* If there's a UNIT_ATTENTION condition pending, only
@@ -51,7 +51,7 @@ index 4bbbee6..d06fd67 100644
              ide_atapi_cmd_ok(s);
          } else {
              s->cdrom_changed = 0;
-@@ -2319,9 +2327,29 @@ int ide_attach(IDEIFState *s, int drive, const char *filename)
+@@ -2367,9 +2375,29 @@ int ide_attach(IDEIFState *s, int drive, const char *filename)
      return 0;
  }
  
@@ -81,7 +81,7 @@ index 4bbbee6..d06fd67 100644
  #ifdef IDE_ENABLE_CISO
      BlockDevice *bs = block_device_init_ciso(filename);
  #else
-@@ -2331,25 +2359,34 @@ int ide_attach_cd(IDEIFState *s, int drive, const char *filename)
+@@ -2379,25 +2407,34 @@ int ide_attach_cd(IDEIFState *s, int drive, const char *filename)
      return 0;
  }
  
@@ -120,7 +120,7 @@ index 4bbbee6..d06fd67 100644
      }
  
      int64_t file_size;
-@@ -2359,7 +2396,7 @@ static void block_device_reinit(BlockDevice *bs, const char *filename)
+@@ -2407,7 +2444,7 @@ static void block_device_reinit(BlockDevice *bs, const char *filename)
      f = fopen(filename, mode_str);
      if (!f) {
          fprintf(stderr, "block_device_reinit: open failed: %s\n", filename);
@@ -129,7 +129,7 @@ index 4bbbee6..d06fd67 100644
      }
  
      fseeko(f, 0, SEEK_END);
-@@ -2370,18 +2407,21 @@ static void block_device_reinit(BlockDevice *bs, const char *filename)
+@@ -2418,18 +2455,21 @@ static void block_device_reinit(BlockDevice *bs, const char *filename)
          fclose(bf->f);
      bf->f = f;
      bf->start_offset = 0;
@@ -173,7 +173,7 @@ index 25ecb87..360ca39 100644
  void ide_data_writew(void *opaque, uint32_t val);
  uint32_t ide_data_readw(void *opaque);
 diff --git a/pc.c b/pc.c
-index fe1f867..5222c20 100644
+index 64b1dcc..6f86f1d 100644
 --- a/pc.c
 +++ b/pc.c
 @@ -795,8 +795,8 @@ PC *pc_new(SimpleFBDrawFunc *redraw, void *redraw_data,

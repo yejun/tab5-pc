@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased
+
+Faster, mostly in the translator and under paging, with the emulator's own code in PSRAM, and a number of fixes.
+tiny386 is at c74cb71 (was 2c1205c).
+
+Speed since 1.7.0, measured on a Tab5:
+
+- a 3D game's time demo under a DOS extender with paging: 226 s (4.3 fps) -> 171 s (5.7 fps);
+- another game's time demo: 103 s -> 87 s;
+- Linux, `ls -lR /` over the whole system: 24.4 s -> 17.9 s;
+- a 3D game whose engine rewrites operands in its inner loops: 1.2 -> about 7 fps;
+- the emulator's own code runs from PSRAM instead of flash (code the caches have lost comes back several times
+  faster).
+
+Fixed:
+
+- A Tab5 set to start with Wi-Fi on could restart over and over (too little internal memory left for Wi-Fi's
+  driver). Wi-Fi is not started without enough memory now, and a Tab5 that crashes or hangs while starting gets
+  itself out: Wi-Fi left off after two crashes in a row, the PC too after four, a start stuck for 20 s ended as a
+  crash; the settings panel says what happened.
+- Writes to the linear frame buffer under paging could miss the screen (parts of a picture stayed as they were).
+- Web server: an upload with a bad offset or without a length could delete or empty the file; an upload that
+  stalled held the server; a folder holding the running PC's disk images could be deleted, and an image wasn't
+  recognised under its short (8.3) name; a download the card stopped answering ended as a shorter file.
+- Commands to a missing second IDE drive are aborted, as a drive does: two seconds less at every start of a system
+  whose disk driver probes for it.
+- The BIOS's check for a key returns with interrupts on (a benchmark under DOS's power manager stopped for good).
+- x87: register and double stores keep or round from all 80 bits, NaNs keep their sign and payload through single
+  precision, double subnormals widen exactly, FBLD loads all 18 digits, and sums, products and quotients at 24-bit
+  precision round as an x87 does.
+- ROL and ROR by 32, 64... leave the flags alone; BT, BTS, BTR and BTC on memory take a register's bit number as
+  signed; translated shifts of memory by CL = 0 read the operand.
+- The VGA status register (3DAh) shows horizontal blanking: a game that waits for it before each palette write
+  stood still half of the time.
+- The PS/2 mouse reports at the rate the guest set, one packet at a time (a protected-mode GUI could lose bytes of
+  packets that came faster: the pointer leapt).
+
+New serial switches to narrow down a problem (`jit dir`, `jit grp`, `jit flrelax`, `jit rvc`, `jit invlpg`, `jit
+reval`, `steps auto`, `pit drop`) are listed in the README.
+
 ## 1.7.0 (2026-11-11)
 
 The side panels dressed for the holidays, faster x87 floating-point code, a resting second core while the PC

@@ -9,21 +9,36 @@ set as a BIOS leaves them (Linux's ata_piix skips a channel without them), and s
 decoding and bus mastering (Linux's ata_generic takes only an enabled controller). The drive's buffer is whole
 cache lines (posix_memalign), so that the image's reads and writes can go straight to and from it. CD-ROM drives
 stay PIO (they accept a PIO transfer mode). The BIOS and DOS keep using PIO.
+The drive's buffer is write gathering's (tiny386's a3099a9): a build defines IDE_ENABLE_WRITE_GATHER.
 
+diff --git a/ide.c b/ide.c
+index 1d55058..02bc12a 100644
 --- a/ide.c
 +++ b/ide.c
-@@ -369,7 +369,9 @@
-     int data_index;
+@@ -308,6 +308,8 @@
+ /* a write command's blocks are gathered, up to this many sectors, and written together
+    (a buffer of that many sectors, 64 KB, allocated on the first write: not for small MCUs) */
+ #define WRITE_GATHER_SECTORS 128
++#else
++#error "bus-master DMA moves its sectors through the write gathering buffer: define IDE_ENABLE_WRITE_GATHER"
+ #endif
+ 
+ #ifdef BUILD_ESP32
+@@ -373,10 +375,12 @@ struct IDEState {
      int data_end;
      uint8_t io_buffer[MAX_MULT_SECTORS*512 + 4];
+ #ifdef IDE_ENABLE_WRITE_GATHER
 -    uint8_t *wbuf; /* WRITE_GATHER_SECTORS, allocated on the first write */
 +    uint8_t *wbuf; /* WRITE_GATHER_SECTORS, allocated on the first write (and DMA's) */
-+    uint8_t dma_cmd; /* a READ DMA (1) or WRITE DMA (2) waiting for the bus master */
-+    int8_t mdma_mode; /* the multiword DMA mode set (SET FEATURES), -1: none */
      int wcount; /* sectors gathered in it, from wsector on */
      int64_t wsector;
+ #endif
++    uint8_t dma_cmd; /* a READ DMA (1) or WRITE DMA (2) waiting for the bus master */
++    int8_t mdma_mode; /* the multiword DMA mode set (SET FEATURES), -1: none */
  };
-@@ -383,6 +385,11 @@
+ 
+ struct IDEIFState {
+@@ -388,6 +392,11 @@ struct IDEIFState {
      IDEState *drives[2];
      /* 0x3f6 command */
      uint8_t cmd;
@@ -35,7 +50,7 @@ stay PIO (they accept a PIO transfer mode). The BIOS and DOS keep using PIO.
  };
  
  static void ide_sector_read_cb(void *opaque, int ret);
-@@ -440,9 +447,10 @@
+@@ -445,9 +454,10 @@ static void ide_identify(IDEState *s)
      padstr((char *)(tab + 27), "TINY386 HARDDISK", 40);
      stw(tab + 47, 0x8000 | MAX_MULT_SECTORS);
      stw(tab + 48, 1); /* dword I/O */
@@ -47,7 +62,7 @@ stay PIO (they accept a PIO transfer mode). The BIOS and DOS keep using PIO.
      stw(tab + 54, s->cylinders);
      stw(tab + 55, s->heads);
      stw(tab + 56, s->sectors);
-@@ -453,6 +461,13 @@
+@@ -458,6 +468,13 @@ static void ide_identify(IDEState *s)
          stw(tab + 59, 0x100 | s->mult_sectors);
      stw(tab + 60, s->nb_sectors);
      stw(tab + 61, s->nb_sectors >> 16);
@@ -61,7 +76,7 @@ stay PIO (they accept a PIO transfer mode). The BIOS and DOS keep using PIO.
      stw(tab + 80, (1 << 1) | (1 << 2));
      stw(tab + 82, (1 << 14));
      stw(tab + 83, (1 << 14));
-@@ -643,6 +658,14 @@
+@@ -648,6 +665,14 @@ static void ide_sector_read_cb_end(IDEState *s)
      ide_transfer_stop(s);
  }
  
@@ -76,7 +91,7 @@ stay PIO (they accept a PIO transfer mode). The BIOS and DOS keep using PIO.
  static void ide_sector_write_cb1(IDEState *s)
  {
      int64_t sector_num;
-@@ -658,7 +681,7 @@
+@@ -667,7 +692,7 @@ static void ide_sector_write_cb1(IDEState *s)
         the buffer is full): many small writes take an SD card much longer than one
         big one. The command still completes only once they are written. */
      if (!s->wbuf)
@@ -85,7 +100,7 @@ stay PIO (they accept a PIO transfer mode). The BIOS and DOS keep using PIO.
      if (s->wbuf) {
          gathered = 1;
          if (!s->wcount)
-@@ -733,6 +756,180 @@
+@@ -747,6 +772,180 @@ static void ide_sector_write(IDEState *s)
      s->status = READY_STAT | SEEK_STAT | DRQ_STAT;
  }
  
@@ -266,7 +281,7 @@ stay PIO (they accept a PIO transfer mode). The BIOS and DOS keep using PIO.
  static void ide_identify_cb(IDEState *s)
  {
      ide_transfer_stop(s);
-@@ -744,6 +941,11 @@
+@@ -758,6 +957,11 @@ static void ide_exec_cmd(IDEState *s, int val)
  #if defined(DEBUG_IDE)
      printf("ide: exec_cmd=0x%02x\n", val);
  #endif
@@ -278,7 +293,7 @@ stay PIO (they accept a PIO transfer mode). The BIOS and DOS keep using PIO.
      switch(val) {
      case WIN_IDENTIFY:
          ide_identify(s);
-@@ -798,6 +1000,37 @@
+@@ -812,6 +1016,37 @@ static void ide_exec_cmd(IDEState *s, int val)
              ide_sector_write(s);
          }
          break;
@@ -316,7 +331,7 @@ stay PIO (they accept a PIO transfer mode). The BIOS and DOS keep using PIO.
      case WIN_READ_NATIVE_MAX:
          ide_set_sector(s, s->nb_sectors - 1);
          s->status = READY_STAT;
-@@ -1561,6 +1794,14 @@
+@@ -1575,6 +1810,14 @@ static void idecd_exec_cmd(IDEState *s, int val)
          ide_transfer_start2(s, 0, 512, ide_transfer_stop2);
          ide_set_irq(s);
          break;
@@ -331,7 +346,7 @@ stay PIO (they accept a PIO transfer mode). The BIOS and DOS keep using PIO.
      case WIN_IDENTIFY:
      case WIN_READ:
          ide_set_signature(s);
-@@ -1705,8 +1946,10 @@
+@@ -1719,8 +1962,10 @@ void ide_cmd_write(void *opaque, uint32_t val)
              if (s) {
                  s->status = BUSY_STAT | SEEK_STAT;
                  s->error = 0x01;
@@ -342,7 +357,7 @@ stay PIO (they accept a PIO transfer mode). The BIOS and DOS keep using PIO.
      } else if ((s1->cmd & IDE_CMD_RESET) && !(val & IDE_CMD_RESET)) {
          /* high to low */
          for(i = 0; i < 2; i++) {
-@@ -1877,6 +2120,7 @@
+@@ -1891,6 +2136,7 @@ static IDEState *ide_hddrive_init(IDEIFState *ide_if, BlockDevice *bs)
          s->bs->get_chs(s->bs, &s->cylinders, &s->heads, &s->sectors);
  
      s->mult_sectors = MAX_MULT_SECTORS;
@@ -350,7 +365,7 @@ stay PIO (they accept a PIO transfer mode). The BIOS and DOS keep using PIO.
      /* ide regs */
      s->feature = 0;
      s->error = 0;
-@@ -2458,11 +2702,37 @@
+@@ -2472,11 +2718,37 @@ int ide_change_cd(IDEIFState *sif, int drive, const char *filename)
      return 0;
  }
  
@@ -390,9 +405,11 @@ stay PIO (they accept a PIO transfer mode). The BIOS and DOS keep using PIO.
      return d;
  }
  
+diff --git a/ide.h b/ide.h
+index 360ca39..a218ed9 100644
 --- a/ide.h
 +++ b/ide.h
-@@ -49,7 +49,12 @@
+@@ -49,7 +49,12 @@ void ide_cmd_write(void *opaque, uint32_t val);
  uint32_t ide_status_read(void *opaque);
  
  #include "pci.h"
@@ -406,9 +423,11 @@ stay PIO (they accept a PIO transfer mode). The BIOS and DOS keep using PIO.
  
  void ide_fill_cmos(IDEIFState *s, void *cmos,
                     uint8_t (*set)(void *cmos, int addr, uint8_t val));
+diff --git a/pc.c b/pc.c
+index 99e75e7..2824521 100644
 --- a/pc.c
 +++ b/pc.c
-@@ -154,6 +154,9 @@
+@@ -154,6 +154,9 @@ static u8 pc_io_read(void *o, int addr)
  	PC *pc = o;
  	u8 val;
  
@@ -418,7 +437,7 @@ stay PIO (they accept a PIO transfer mode). The BIOS and DOS keep using PIO.
  	switch(addr) {
  	case 0x20: case 0x21: case 0xa0: case 0xa1:
  		val = i8259_ioport_read(pc->pic, addr);
-@@ -286,6 +289,9 @@
+@@ -286,6 +289,9 @@ static u16 pc_io_read16(void *o, int addr)
  	PC *pc = o;
  	u16 val;
  
@@ -428,7 +447,7 @@ stay PIO (they accept a PIO transfer mode). The BIOS and DOS keep using PIO.
  	switch(addr) {
  	case 0x1ce: case 0x1cf:
  		val = vbe_read(pc->vga, addr - 0x1ce);
-@@ -317,6 +323,9 @@
+@@ -317,6 +323,9 @@ static u32 pc_io_read32(void *o, int addr)
  {
  	PC *pc = o;
  	u32 val;
@@ -438,7 +457,7 @@ stay PIO (they accept a PIO transfer mode). The BIOS and DOS keep using PIO.
  	switch(addr) {
  	case 0x1f0:
  		val = ide_data_readl(pc->ide);
-@@ -358,6 +367,9 @@
+@@ -358,6 +367,9 @@ static int pc_io_read_string(void *o, int addr, uint8_t *buf, int size, int coun
  static void pc_io_write(void *o, int addr, u8 val)
  {
  	PC *pc = o;
@@ -448,7 +467,7 @@ stay PIO (they accept a PIO transfer mode). The BIOS and DOS keep using PIO.
  	switch(addr) {
  	case 0x80: case 0xed:
  		/* used by linux, for io delay */
-@@ -507,6 +519,9 @@
+@@ -507,6 +519,9 @@ static void pc_io_write(void *o, int addr, u8 val)
  static void pc_io_write16(void *o, int addr, u16 val)
  {
  	PC *pc = o;
@@ -458,7 +477,7 @@ stay PIO (they accept a PIO transfer mode). The BIOS and DOS keep using PIO.
  	switch(addr) {
  	case 0x1f0:
  		ide_data_writew(pc->ide, val);
-@@ -544,6 +559,9 @@
+@@ -544,6 +559,9 @@ static void pc_io_write16(void *o, int addr, u16 val)
  static void pc_io_write32(void *o, int addr, u32 val)
  {
  	PC *pc = o;
@@ -468,7 +487,7 @@ stay PIO (they accept a PIO transfer mode). The BIOS and DOS keep using PIO.
  	switch(addr) {
  	case 0x1f0:
  		ide_data_writel(pc->ide, val);
-@@ -819,7 +837,7 @@
+@@ -819,7 +837,7 @@ PC *pc_new(SimpleFBDrawFunc *redraw, void *redraw_data,
  
  	int piix3_devfn;
  	pc->i440fx = i440fx_init(&pc->pcibus, &piix3_devfn);

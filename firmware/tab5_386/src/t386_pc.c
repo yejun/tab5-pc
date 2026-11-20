@@ -29,12 +29,18 @@ void t386_port_report(char* buf, int len) {
     if (n > 0 && n < len && buf[n - 1] == '\n') buf[n - 1] = 0;
 }
 
-// Instructions per pc_step: tiny386's ESP32 default is 512, and the devices are polled (PIT, CMOS, keyboard, DMA)
-// between steps, at a cost of a few hundred instructions' time. The PIT raises at most one interrupt per poll, so
-// steps stay short while channel 0 runs fast (sampled sound through the PC speaker: up to ~16 kHz), and get up to
-// t386_step_max long (serial "steps <n>") at the usual rates (18.2 Hz to ~1 kHz).
+// Instructions per pc_step: tiny386's ESP32 default is 512, and the devices are polled (PIT, CMOS, serial, keyboard,
+// network, DMA) between steps, at a cost of a few hundred instructions' time: at 2048 a step, 5500-8500 polls a
+// second and 4-5% of the core. The PIT raises at most one interrupt per poll, so steps stay short while channel 0
+// runs fast (sampled sound through the PC speaker: up to ~16 kHz), and get up to t386_step_max long at the usual
+// rates (18.2 Hz to ~1 kHz). t386_step_max follows the guest's speed so that a full step lasts t386_step_us
+// microseconds (cpui386_step in t386_fast.h; serial "steps auto [<us>]"), or is fixed (serial "steps <n>",
+// t386_step_us 0). An interrupt a port access raises (a disk's) or an exception ends a step at once; what waits
+// for the poll is the timer's, the keyboard's and mouse's, the serial port's input, received network packets and
+// sound's DMA.
 #include "i8254.h"
 int t386_step_max = 2048;
+int t386_step_us = 1500;
 static inline int t386_step_count(PITState* pit) {
     const int n = pit_get_initial_count(pit, 0) * 2;
     return n < 512 ? 512 : n > t386_step_max ? t386_step_max : n;

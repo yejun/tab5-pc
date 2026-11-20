@@ -4,7 +4,7 @@ Rebased onto tiny386's decrement-mode DMA (its #61, which was our 0020): written
 address, the bytes covered start at addr - pos - len + 1.
 
 diff --git a/i386.c b/i386.c
-index 958e9da..674080c 100644
+index 495b455..0c6c721 100644
 --- a/i386.c
 +++ b/i386.c
 @@ -15,6 +15,12 @@
@@ -52,7 +52,7 @@ index 958e9da..674080c 100644
  		switch(res->addr1 & 0xf) {
  		case 0xf:
  			pstore8(cpu, res->addr1, val);
-@@ -2895,6 +2908,7 @@ static bool call_isr(CPUI386 *cpu, int no, bool pusherr, int ext);
+@@ -2896,6 +2909,7 @@ static bool call_isr(CPUI386 *cpu, int no, bool pusherr, int ext);
  		if (cpu->cb.io_read_string && dir > 0 && \
  		    (memld.addr1 | 4095) < cpu->phys_mem_size && \
  		    !in_iomem(memld.addr1) && !in_iomem(memld.addr1 | 4095)) { \

@@ -55,6 +55,14 @@ static void wifi_enable(bool on) {
   if (on == (g_wifi != WIFI_DISABLED)) return;
   if (on) {
     if (!g_wifi_ready) {
+      // (start_guard.h) with too little of it Wi-Fi's driver stops as it starts, and the Tab5 restarts
+      const unsigned dma = heap_caps_get_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+      if (dma < WIFI_NEEDS) {
+        g_wifi_short = dma;
+        Serial.printf("wifi: not started: %u bytes of DMA-capable internal RAM free, it needs %u\n", dma, WIFI_NEEDS);
+        return;
+      }
+      g_wifi_short = 0;
       // WiFi takes ~160 KB of internal RAM (ESP-Hosted's DMA buffers, lwIP's packets): with the rest of the firmware,
       // all there is, and an allocation that failed reset the Tab5 or broke the SD card's reads. From here on,
       // malloc() puts blocks of 512 bytes and more in PSRAM (not only those of 4 KB and more): lwIP's packets go
@@ -71,6 +79,7 @@ static void wifi_enable(bool on) {
       esp_wifi_start();
     }
     g_wifi = WIFI_NONE;
+    g_guard_wifi = false;   // (start_guard.h: its note in the settings has done its work)
     Serial.println("wifi: on");
     if (!g_ssid.isEmpty()) wifi_start(g_ssid, g_pass);
   } else {

@@ -15,7 +15,7 @@
 //                  tools/shot.py --panel) | type <text> (\n Enter, \e Esc,
 //                  \b Backspace, \t Tab) | key <hid> [<hid>...] (tap keys by USB HID code, hex, held together;
 //                  e0/e1/e2 = Ctrl/Shift/Alt)
-//                  | fps <n> (screen refresh rate, 0 = paused) | mem | vol <0-255> | mouse <gain> | wifi on|off | wifi <ssid> <password> | ip | net | raw 0|1 | steps <n> | vgafast 0|1 | peek <addr> [<len>] | panel
+//                  | fps <n> (screen refresh rate, 0 = paused) | mem | pit [0 | drop 0|1] (timer ticks dropped) | vol <0-255> | mouse <gain> | wifi on|off | wifi <ssid> <password> | ip | net | raw 0|1 | steps <n> | vgafast 0|1 | peek <addr> [<len>] | panel
 //                  | text (the screen's text in a text mode) | stap <x> <y> <ms> (a press on the side panels)
 //                  | holiday 1|0|auto (the side panels' holiday look: on, off, by the date)
 //                  | idle 0|1 (a halted PC lets core 1 sleep) | vga cell <row> <col> (a text cell, its font maps, glyphs)
@@ -38,6 +38,10 @@ extern int t386_jit_hot;
 extern uint32_t t386_disk_cmds, t386_disk_sectors, t386_disk_hits, t386_disk_retries, t386_disk_prefetched;
 extern uint64_t t386_disk_us;
 extern uint32_t t386_sync_calls, t386_sync_cycles;
+extern uint32_t t386_screen_copies;   // (src/t386_vga_ext.h)
+extern int pit_drop_missed;   // (vendor/patches/0033)
+extern uint32_t pit_dropped;
+extern uint64_t pit_dropped_time;
 #include "src/tab5_config.h"
 #include "src/t386_vga_native.h"
 #include "pc.h"
@@ -63,10 +67,11 @@ extern void (*t386_shutdown)(void);
 extern bool t386_pd_enabled;   // the fast path's pre-decoded blocks (t386_fast_pd.h)
 void t386_pd_report(char* buf, int len);
 void t386_cpu_regs(CPUI386* cpu, char* buf, int len);
+int t386_lin_peek(CPUI386* cpu, uint32_t lin);
 void t386_pic_report(PicState2* s, char* buf, int len);
 void t386_port_report(char* buf, int len);
 void t386_irq_report(char* buf, int len);
-extern int t386_step_max;
+extern int t386_step_max, t386_step_us;
 uint32_t t386_vga_frame_hash(VGAState* s);
 int t386_vga_text(VGAState* s, void (*out)(const char*));
 void t386_vga_snapshot(VGAState* s, uint8_t* shadow, size_t shadow_size);
@@ -129,12 +134,29 @@ static void input_put(const InputEvent& e) {
   if (xQueueSend(g_input, &e, 0) != pdTRUE) Serial.println("input: queue full, event dropped");
 }
 
+// The PS/2 mouse sends one packet at a time, at the rate the guest set and only once the last was read (tiny386
+// since 606b4e7): what it moved meanwhile is added up and goes out with a later event. Once the finger has lifted
+// there is none, so an event of no movement every 10 ms sends what is still held.
+static int8_t g_mouse_buttons;   // (core 1) the buttons as last delivered
+static uint32_t g_mouse_ms;      // millis() of the last event delivered
+
 static void input_deliver() {   // core 1, between steps
   InputEvent e;
   while (xQueueReceive(g_input, &e, 0) == pdTRUE) {
     if (e.kind == 0) ps2_put_keycode(g_pc->kbd, e.down_or_buttons, e.code_or_dx);
-    else ps2_mouse_event(g_pc->mouse, e.code_or_dx, e.dy, 0, e.down_or_buttons);
+    else {
+      ps2_mouse_event(g_pc->mouse, e.code_or_dx, e.dy, 0, e.down_or_buttons);
+      g_mouse_buttons = e.down_or_buttons;
+      g_mouse_ms = millis();
+    }
   }
+}
+
+static inline void mouse_flush() {   // core 1, between steps
+  const uint32_t now = millis();
+  if (now - g_mouse_ms < 10) return;
+  g_mouse_ms = now;
+  ps2_mouse_event(g_pc->mouse, 0, 0, 0, g_mouse_buttons);   // (returns at once when nothing is held)
 }
 
 #include "audio.h"
@@ -179,6 +201,7 @@ static void tab5_restart() {
   esp_deep_sleep(100000);
 }
 
+#include "start_guard.h"
 #include "net.h"
 #include "guest_net.h"
 // An option for builds: core 0's cache maintenance on PSRAM (esp_cache_msync, and that of the PPA's and the card's
@@ -214,13 +237,14 @@ static void t386_msync(void* p, size_t n, int flags) {
 #include "cd_drive.h"
 
 static const char* pc_state() {
-  return g_pc_stopped ? "stopped" : g_disk.drive >= 0 ? "paused: disk open" : g_user_pause ? "paused" : "running";
+  return g_pc_stopped ? "stopped" : g_pc_off ? "off" : g_disk.drive >= 0 ? "paused: disk open" : g_user_pause ? "paused" : "running";
 }
 
 #include "battery.h"
 #include "settings_ui.h"
 #include "screenshot.h"
 #include "side_ui.h"
+#include "src/xip.h"
 
 // ---- display ------------------------------------------------------------------------------------------------
 
@@ -505,6 +529,10 @@ static void print_stats() {
                   (t386_disk_prefetched - last_pf) / dt, (unsigned long)t386_disk_retries);
     last_cmds = t386_disk_cmds, last_sectors = t386_disk_sectors, last_hits = t386_disk_hits, last_us = t386_disk_us;
     last_pf = t386_disk_prefetched;
+    static uint32_t last_copies;   // (t386_vga_ext.h: a program that draws in its own memory does one a frame)
+    Serial.printf("screen copies: %.1f/s (writes to the screen's first byte in graphics modes)\n",
+                  (t386_screen_copies - last_copies) / dt);
+    last_copies = t386_screen_copies;
     static uint32_t last_sc, last_scyc;
     Serial.printf("code sync: %.0f/s, %.1f%% of core 1\n", (t386_sync_calls - last_sc) / dt,
                   (t386_sync_cycles - last_scyc) / dt / 3.6e6);
@@ -618,10 +646,10 @@ static void handle_serial() {
       t386_fast_ops_report(buf, sizeof(buf));
       Serial.print(buf);
     } else if (line == "jit inv" || line == "jit ops") {   // the last invalidated translations; the opcodes run in place
-      static char* buf = (char*)heap_caps_malloc(2600, MALLOC_CAP_SPIRAM);   // (internal RAM: WiFi's)
+      static char* buf = (char*)heap_caps_malloc(4200, MALLOC_CAP_SPIRAM);   // (internal RAM: WiFi's)
       if (!buf) return;
-      if (line == "jit inv") t386_jit_inv_report(buf, 2600);
-      else t386_jit_ops_report(buf, 2600);
+      if (line == "jit inv") t386_jit_inv_report(buf, 4200);
+      else t386_jit_ops_report(buf, 4200);
       for (char* p = buf; *p; ) {   // a line at a time: the USB serial drops what doesn't fit its buffer
         char* e = strchr(p, '\n');
         if (e) *e = 0;
@@ -679,8 +707,9 @@ static void handle_serial() {
         p = e + 2;
       }
     } else if (line == "jit") {
-      static char buf[1200];
-      t386_jit_report(buf, sizeof(buf));
+      static char* buf = (char*)heap_caps_malloc(3200, MALLOC_CAP_SPIRAM);   // (internal RAM: WiFi's)
+      if (!buf) return;
+      t386_jit_report(buf, 3200);
       for (char* p = buf; *p; ) {   // in pieces at "; ": the USB serial drops what doesn't fit its buffer
         char* e = strstr(p, "; ");
         if (e) *e = 0;
@@ -709,10 +738,34 @@ static void handle_serial() {
       extern int t386_jit_ctagw;
       t386_jit_ctagw = line.substring(10).toInt();
       Serial.printf("ctagw %d\n", t386_jit_ctagw);
+    } else if (line.startsWith("jit invlpg ")) {   // INVLPG empties its page's entries (1) or every TLB (0) (t386_fast.h)
+      extern int t386_invlpg_page;
+      t386_invlpg_page = constrain(line.substring(11).toInt(), 0, 1);
+      Serial.printf("jit invlpg %d\n", t386_invlpg_page);
+    } else if (line.startsWith("jit reval ")) {   // jump cache entries kept over TLB flushes (1) or emptied (0) (t386_jit.h)
+      extern int t386_jit_reval;
+      t386_jit_reval = constrain(line.substring(10).toInt(), 0, 1);
+      Serial.printf("jit reval %d\n", t386_jit_reval);
+    } else if (line.startsWith("jit rvc ")) {   // 16-bit instructions in translated code, two at a time (t386_jit.h)
+      extern int t386_jit_rvc;
+      t386_jit_rvc = constrain(line.substring(8).toInt(), 0, 1);
+      Serial.printf("jit rvc %d\n", t386_jit_rvc);
+    } else if (line.startsWith("jit grp ")) {   // with paging, a block's accesses beside each other share one lookup
+      extern int t386_jit_grp;                  // of the TLB (t386_jit.h)
+      t386_jit_grp = constrain(line.substring(8).toInt(), 0, 2);   // (0 off; 2, the default: any two are a group)
+      Serial.printf("jit grp %d\n", t386_jit_grp);
+    } else if (line.startsWith("jit flrelax ")) {   // arithmetic flags at exits only a fault takes: exact (0), not
+      extern int t386_jit_flrelax;                   // kept for reads (1), nor for plain stores (2) (t386_jit.h)
+      t386_jit_flrelax = constrain(line.substring(12).toInt(), 0, 2);
+      Serial.printf("jit flrelax %d\n", t386_jit_flrelax);
     } else if (line == "jit x87fast 0" || line == "jit x87fast 1") {   // x87 runs in host registers off or on (t386_jit.h)
       extern int t386_jit_x87fast;
       t386_jit_x87fast = line.endsWith("1");
       Serial.printf("jit x87fast %d\n", t386_jit_x87fast);
+    } else if (line.startsWith("jit dir ")) {   // direct regions: paged accesses without a TLB lookup (t386_fast.h)
+      extern int t386_dir;
+      t386_dir = line.substring(8).toInt();
+      Serial.printf("dir %d\n", t386_dir);
     } else if (line.startsWith("jit tlbinline ")) {   // paged accesses' TLB lookups in the blocks (1) or called (0)
       extern int t386_jit_tlb_inline;
       t386_jit_tlb_inline = line.substring(14).toInt();
@@ -758,6 +811,19 @@ static void handle_serial() {
           k += snprintf(out + k, sizeof(out) - k, " %02x", g_pc->phys_mem[a + o + i]);
         Serial.println(out);
       }
+    } else if (line.startsWith("peekl ")) {   // peekl <hex address> [<hex length>]: the same at a linear address,
+      char* end;                               // through the guest's page tables ("--": not mapped)
+      uint32_t a = strtoul(line.c_str() + 6, &end, 16), n = strtoul(end, nullptr, 16);
+      if (!n) n = 0x100;
+      for (uint32_t o = 0; o < n; o += 32) {
+        char out[120];
+        int k = snprintf(out, sizeof(out), "PEEK %08lx", (unsigned long)(a + o));
+        for (uint32_t i = 0; i < 32 && o + i < n; ++i) {
+          const int b = t386_lin_peek(g_pc->cpu, a + o + i);
+          k += b < 0 ? snprintf(out + k, sizeof(out) - k, " --") : snprintf(out + k, sizeof(out) - k, " %02x", b);
+        }
+        Serial.println(out);
+      }
     } else if (line == "mem") {   // where the hot data lives (internal RAM is faster than PSRAM)
       char buf[160];
       t386_cpu_report(g_pc->cpu, buf, sizeof(buf));
@@ -766,6 +832,11 @@ static void handle_serial() {
                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
       Serial.printf("%s | PC struct %s | guest RAM %p\n", buf, esp_ptr_external_ram(g_pc) ? "PSRAM" : "internal",
                     g_pc->phys_mem);
+    } else if (line == "xip") {   // the emulator's code in PSRAM (src/xip.h), compared with its copy in flash
+      unsigned size;
+      const long bad = t386_xip_check(&size);
+      if (bad < 0) Serial.printf("xip: %u bytes of code in PSRAM, the same as in flash\n", size);
+      else Serial.printf("xip: %u bytes of code in PSRAM, DIFFERENT from flash at byte %ld\n", size, bad);
     } else if (line.startsWith("stap ")) {   // stap <x> <y> <ms>: a press beside the PC's picture (side_ui.h), held ms
       int x = 0, y = 0, ms = 100;
       sscanf(line.c_str() + 5, "%d %d %d", &x, &y, &ms);
@@ -783,6 +854,13 @@ static void handle_serial() {
       int dx = 0, dy = 0, b = 0;
       sscanf(line.c_str() + 4, "%d %d %d", &dx, &dy, &b);
       input_put({1, (int8_t)b, (int16_t)dx, (int16_t)dy});
+    } else if (line.startsWith("pit")) {   // timer ticks dropped (missed while the PC was held up); pit drop 0|1
+      if (line.startsWith("pit drop ")) pit_drop_missed = line.substring(9).toInt() != 0;
+      else if (line == "pit 0") { pit_dropped = 0; pit_dropped_time = 0; }
+      const int count = g_pc ? pit_get_initial_count(g_pc->pit, 0) : 0;   // (asked before the PC is made: 18.2)
+      Serial.printf("pit: %.1f Hz; missed ticks are %s; %u dropped, %.1f ms of the guest's clock\n",
+                    1193182.0 / (count ? count : 0x10000), pit_drop_missed ? "dropped" : "raised afterwards",
+                    (unsigned)pit_dropped, pit_dropped_time / 1193.182);
     } else if (line.startsWith("mouse ")) {   // touchpad speed: PS/2 counts per pixel of finger movement
       g_mouse_gain = constrain(line.substring(6).toFloat(), 0.1f, 8.0f);
       Serial.printf("mouse gain %.2f\n", g_mouse_gain);
@@ -796,9 +874,16 @@ static void handle_serial() {
       t386_vga = line == "vgafast 1" ? g_pc->vga : nullptr;
       t386_vga_fw_update();
       Serial.println(line);
-    } else if (line.startsWith("steps ")) {   // longest run of instructions between device polls (src/t386_pc.c)
-      t386_step_max = constrain(line.substring(6).toInt(), 512, 8192);
-      Serial.printf("steps %d\n", t386_step_max);
+    } else if (line == "steps" || line.startsWith("steps ")) {   // instructions between device polls (src/t386_pc.c)
+      if (line.startsWith("steps auto")) {   // as many as run in <us> microseconds (1500 without a number)
+        const int us = line.substring(10).toInt();
+        t386_step_us = us ? constrain(us, 200, 10000) : 1500;
+      } else if (line != "steps") {   // a fixed count
+        t386_step_us = 0;
+        t386_step_max = constrain(line.substring(6).toInt(), 512, 65536);
+      }
+      if (t386_step_us) Serial.printf("steps auto %d us (%d now)\n", t386_step_us, t386_step_max);
+      else Serial.printf("steps %d\n", t386_step_max);
     } else if (line.startsWith("vol ")) {
       set_volume(line.substring(4).toInt());
     } else if (line == "wifi on" || line == "wifi off") {
@@ -955,14 +1040,21 @@ static void display_task(void*) {
       }
     }
   };
+  guard_watch(true);   // (start_guard.h: until the second round of the loop below)
+  Serial.printf("start: DMA-capable internal RAM %u free before Wi-Fi\n",
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+  Serial.flush();
   if (g_setup_needed) {   // nothing on the card yet: Wi-Fi on, and the panel's Install DOS / Install Linux
-    wifi_enable(true);
+    if (!g_guard_wifi) wifi_enable(true);
     panel_open();
   } else if (g_prefs.getBool("wifi", false) || g_prefs.getBool("wifiback", false)) {   // WiFi on as last chosen
     g_prefs.remove("wifiback");   // (net.h, wifi_choose), or restarted with it on (web.h, restart_tab5): on again
-    wifi_enable(true);
+    if (!g_guard_wifi) wifi_enable(true);   // (start_guard.h: not after crashes in a row)
   }
-  for (;;) {
+  if (g_guard_wifi || g_wifi_short) panel_open();   // (it says what happened: ui_refresh_status)
+  for (unsigned round = 0;; ++round) {
+    if (round == 1) guard_watch(false);   // the start got through
+    guard_poll(esp_timer_get_time() / 1000);
     kbd_poll();
     usb_kbd_poll();
     battery_poll();
@@ -1016,6 +1108,11 @@ static void display_task(void*) {
         d.setFont(&fonts::Font2);
         d.setTextColor(0x4A49);
         d.drawString(g_side_on ? "Tap POWER to turn it on" : "Tap to turn it on", SCR_W / 2, SCR_H / 2 + 20);
+        if (g_guard_pc) {   // (start_guard.h)
+          d.setTextColor(0xFBCD);
+          d.drawString("Left off: the Tab5 crashed several times in a row while starting.", SCR_W / 2, SCR_H / 2 + 62);
+          d.drawString("SETUP has other machines to start.", SCR_W / 2, SCR_H / 2 + 84);
+        }
         fb_sync();
         g_box_w = 0;
         last_hash = 0;
@@ -1223,6 +1320,9 @@ static void panel_free_second_fb(lgfx::Panel_DSI* panel) {
 void setup() {
   Serial.begin(115200);
   Serial.setTxTimeoutMs(0);
+  if (const int e = t386_xip_begin()) {   // (src/xip.h: before anything of the emulator runs)
+    for (;;) { Serial.printf("the emulator's code could not be set up in PSRAM (%d)\n", e); delay(2000); }
+  }
   auto cfg = M5.config();
   cfg.output_power = false;
   cfg.internal_imu = false;
@@ -1235,6 +1335,7 @@ void setup() {
   xSemaphoreGive(g_i2c_lock);
   Serial.printf("\nTab5 PC %s (reset reason %d, wakeup cause %d)\n", FIRMWARE_VERSION, (int)esp_reset_reason(),
                 (int)esp_sleep_get_wakeup_cause());
+  guard_setup();
   kbd_begin();
   usb_kbd_setup();
   g_rot = kbd_present_at_boot() ? 3 : 1;   // docked in the keyboard, the Tab5 is upside down
@@ -1297,6 +1398,7 @@ void setup() {
   disk_raw_setup(g_conf);
   load_bios_and_reset(g_pc);
   g_pc->boot_start_time = get_uticks();
+  if (g_guard_pc) g_pc_off = true;   // (start_guard.h: POWER, or a machine started in the settings, turns it on)
   audio_start();
   disk_setup();
   wifi_setup();
@@ -1316,6 +1418,7 @@ void loop() {
     }
     g_held = false;
     if (uxQueueMessagesWaiting(g_input)) input_deliver();
+    mouse_flush();
     if (g_gnet_rx && uxQueueMessagesWaiting(g_gnet_rx)) guest_net_deliver();
     if (g_install_mode && g_pc->reset_request && fd_install_finish()) {   // an install done (fd_install.h): restart
       delay(500);

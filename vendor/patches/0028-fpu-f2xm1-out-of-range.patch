@@ -4,9 +4,10 @@ give, one of them the operand left as it was; tiny386's 7.82 made it report a "N
 operand beyond +-1 is left as it was; in range (what exp() and pow() code use) nothing changes.
 
 diff --git a/fpu.c b/fpu.c
+index 071623b..9a9671f 100644
 --- a/fpu.c
 +++ b/fpu.c
-@@ -1131,6 +1131,10 @@
+@@ -1131,6 +1131,10 @@ bool fpu_exec1(FPU *fpu, void *cpu, int op, int group, unsigned int i)
  			temp = fpget(fpu, 0);
  			switch (i) {
  			case 0: // F2XM1

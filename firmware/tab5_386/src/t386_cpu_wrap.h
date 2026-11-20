@@ -18,3 +18,7 @@ void t386_code_write(uint32_t addr, int len);
 // on and off for every DOS call, each a MOV CR0 that empties tiny386's TLB.)
 static unsigned t386_tlb_gen;
 #define T386_TLB_CLEARED() (t386_tlb_gen += (cpu->cr0 >> 31) & 1)
+// INVLPG (vendor/patches/0031): the fast path's (t386_fast.h), just the page's entries
+struct CPUI386;
+static void t386_invlpg(struct CPUI386 *cpu, uint32_t laddr);
+#define T386_INVLPG(cpu, laddr) t386_invlpg((cpu), (laddr))

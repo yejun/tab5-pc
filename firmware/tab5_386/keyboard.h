@@ -14,6 +14,7 @@ static constexpr int KBD_SDA = 0, KBD_SCL = 1, KBD_INT = 50;
 static constexpr uint32_t KBD_FREQ = 400000;
 static constexpr int64_t KBD_PROBE_MS = 2000;   // look for a keyboard this often while none answers
 static constexpr int64_t KBD_POLL_MS = 100;     // read the queue at least this often, should an INT edge be missed
+static constexpr uint8_t KBD_LIGHT = 3;         // the two lights' brightness, 0 (off) to 100 (10 up to 1.7.0: too bright)
 enum : uint8_t { KBD_REG_EVENT_NUM = 0x02, KBD_REG_BRIGHTNESS = 0x03, KBD_REG_MODE = 0x10, KBD_REG_RGB_MODE = 0x11,
                  KBD_REG_RGB1 = 0x60, KBD_REG_RGB2 = 0x64, KBD_REG_KEY_EVENT = 0x20, KBD_REG_VERSION = 0xFE };
 static constexpr uint8_t KMOD_SHIFT = 0x02;   // HID modifier bit: the key needs Shift
@@ -151,7 +152,7 @@ static bool kbd_probe() {
   return M5.Ex_I2C.writeRegister8(KBD_ADDR, KBD_REG_MODE, 0, KBD_FREQ) &&
          M5.Ex_I2C.writeRegister8(KBD_ADDR, KBD_REG_EVENT_NUM, 0, KBD_FREQ) &&
          M5.Ex_I2C.writeRegister8(KBD_ADDR, KBD_REG_RGB_MODE, 1, KBD_FREQ) &&
-         M5.Ex_I2C.writeRegister8(KBD_ADDR, KBD_REG_BRIGHTNESS, 10, KBD_FREQ);
+         M5.Ex_I2C.writeRegister8(KBD_ADDR, KBD_REG_BRIGHTNESS, KBD_LIGHT, KBD_FREQ);
 }
 
 static constexpr uint32_t LED_OFF = 0, LED_WHITE = 0xFFFFFF, LED_AMBER = 0xFF8000, LED_GREEN = 0x00FF00;

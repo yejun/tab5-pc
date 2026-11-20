@@ -92,9 +92,9 @@ static inline void t386_fcom(FPU *fpu, double a, double b)
 }
 
 // a denormal, an infinity or a NaN (libgcc's), out of line: the quick ways' callers then keep no registers
-static __attribute__((noinline)) double t386_f32_other(uint32_t bits) { union union32 v = { .i = bits }; return v.f; }
+static __attribute__((noinline)) double t386_f32_other(uint32_t bits) { return fp32_to_double(bits); }
 
-// a single's bits as a double (normal or zero by the bits, the rest by libgcc)
+// a single's bits as a double (normal or zero inline, other encodings through the interpreter's conversion)
 static inline double t386_f32(uint32_t bits)
 {
 	if (t386_normal_f32(bits)) return t386_f32n(bits);
@@ -107,18 +107,22 @@ static inline double t386_f32(uint32_t bits)
 // made by fpget when tiny386's code wants it): no conversion to a double and back for each instruction.
 static double t386_single(unsigned bits) { return t386_f32nz(bits); }
 
-// st[idx] (an x87 register, not a stack position) as a single's bits, when it is exactly a normal single or a zero:
-// kept as one, or st[idx] up to date (fpget's test: else it is in rawst), which is then kept as a single too (for
-// the inline code: a value FLD1 or FILD pushed, say)
+static inline bool t386_st_can_copy(const FPU *fpu, unsigned idx)
+{
+	// rawtagr alone means fpget cached a double. rawst may still have more bits.
+	return fpu->rawtagw >> idx & 1;
+}
+
+// Return an exact normal single or zero, caching it for inline code when st[idx] holds the full value.
 static inline bool t386_st_f32(FPU *fpu, unsigned idx, uint32_t *f)
 {
 	if (fpu->sv >> idx & 1) {
 		*f = fpu->sb[idx];
 		return true;
 	}
-	if (!((fpu->rawtagr | fpu->rawtagw) >> idx & 1) || !t386_d2f(fpu->st[idx], f)) return false;
+	if (!t386_st_can_copy(fpu, idx) || !t386_d2f(fpu->st[idx], f)) return false;
 	fpu->sb[idx] = *f;
-	fpu->sv |= 1 << idx;   // (st[idx] the same value: its tags as they are)
+	fpu->sv |= 1 << idx;
 	return true;
 }
 static inline void t386_st_set_f32(FPU *fpu, unsigned idx, uint32_t bits)   // (fpset's, as a single)
@@ -326,8 +330,7 @@ uint32_t t386_fpu_st_f32(FPU *fpu)
 }
 uint64_t t386_fpu_st_f64(FPU *fpu)
 {
-	union union64 u = { .f = fpget(fpu, 0) };
-	return u.i;
+	return fpstore64_bits(fpu);
 }
 
 // DB /2 /3 FIST(P) m32, DF /2 /3 FIST(P) m16: ST(0) rounded to an integer in the rounding mode (out of range: the
@@ -415,10 +418,6 @@ static inline void t386_st_copy(FPU *fpu, unsigned to, unsigned from)
 	fpu->sv = (sv & ~(1u << to)) | (sv >> from & 1) << to;
 	fpu->rawtagw |= 1 << to;
 }
-static inline bool t386_st_valid(const FPU *fpu, unsigned idx)   // up to date: kept as a single or in st[]
-{
-	return (fpu->rawtagr | fpu->rawtagw) >> idx & 1;   // (kept as a single: rawtagw too)
-}
 
 // D9 /0 FLD ST(i), D9 /1 FXCH, DD /2 FST ST(i), DD /3 FSTP ST(i), a helper each: the registers' values moved as they
 // are kept, when they are up to date (else in rawst: fpu_exec1)
@@ -430,7 +429,7 @@ static __attribute__((noinline)) void t386_fpu_move_other(FPU *fpu, uint32_t op_
 void t386_fpu_fld_reg(FPU *fpu, uint32_t op_group, uint32_t i)
 {
 	const unsigned top = fpu->top & 7, sti = (top + i) & 7;
-	if (!t386_st_valid(fpu, sti)) {
+	if (!t386_st_can_copy(fpu, sti)) {
 		t386_fpu_move_other(fpu, op_group, i);
 		return;
 	}
@@ -441,7 +440,7 @@ void t386_fpu_fld_reg(FPU *fpu, uint32_t op_group, uint32_t i)
 void t386_fpu_fxch_reg(FPU *fpu, uint32_t op_group, uint32_t i)
 {
 	const unsigned top = fpu->top & 7, sti = (top + i) & 7;
-	if (!t386_st_valid(fpu, sti) || !t386_st_valid(fpu, top)) {
+	if (!t386_st_can_copy(fpu, sti) || !t386_st_can_copy(fpu, top)) {
 		t386_fpu_move_other(fpu, op_group, i);
 		return;
 	}
@@ -458,7 +457,7 @@ void t386_fpu_fxch_reg(FPU *fpu, uint32_t op_group, uint32_t i)
 void t386_fpu_fst_reg(FPU *fpu, uint32_t op_group, uint32_t i)
 {
 	const unsigned top = fpu->top & 7, sti = (top + i) & 7;
-	if (!t386_st_valid(fpu, top)) {
+	if (!t386_st_can_copy(fpu, top)) {
 		t386_fpu_move_other(fpu, op_group, i);
 		return;
 	}
@@ -468,7 +467,7 @@ void t386_fpu_fst_reg(FPU *fpu, uint32_t op_group, uint32_t i)
 void t386_fpu_fstp_reg(FPU *fpu, uint32_t op_group, uint32_t i)
 {
 	const unsigned top = fpu->top & 7, sti = (top + i) & 7;
-	if (!t386_st_valid(fpu, top)) {
+	if (!t386_st_can_copy(fpu, top)) {
 		t386_fpu_move_other(fpu, op_group, i);
 		return;
 	}

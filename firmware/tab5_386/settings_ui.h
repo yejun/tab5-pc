@@ -250,13 +250,23 @@ static void ui_refresh_status() {
     lv_label_set_text(ui_wifi, g_wifi_request ? "Switching Wi-Fi on ..." : "Switching Wi-Fi off ...");
     lv_obj_set_style_text_color(ui_wifi, lv_color_hex(C_INK), 0);
   } else switch (g_wifi) {
-    case WIFI_DISABLED:        lv_label_set_text(ui_wifi, "Wi-Fi is off: switch it on to copy files"); break;
+    case WIFI_DISABLED:
+      if (g_wifi_short)
+        lv_label_set_text_fmt(ui_wifi, "Can't start: too little\nmemory (%u of %u KB)", g_wifi_short / 1000,
+                              WIFI_NEEDS / 1000);   // (two lines of 24 fit)
+      else if (g_guard_wifi)
+        lv_label_set_text_fmt(ui_wifi, "Left off after %d crashes\nin a row: switch to try", g_crashes);
+      else lv_label_set_text(ui_wifi, "Wi-Fi is off: switch it on to copy files");
+      break;
     case WIFI_NONE:       lv_label_set_text(ui_wifi, "Not set up - choose a network"); break;
     case WIFI_CONNECTING: lv_label_set_text_fmt(ui_wifi, "Connecting to %s ...", g_try_ssid.c_str()); break;
     case WIFI_FAILED:     lv_label_set_text_fmt(ui_wifi, "Could not connect to %s", g_try_ssid.c_str()); break;
     case WIFI_UP:         lv_label_set_text_fmt(ui_wifi, LV_SYMBOL_WIFI "  %s  (%d dBm)", g_ssid.c_str(), (int)WiFi.RSSI()); break;
   }
-  if (g_wifi_request < 0) lv_obj_set_style_text_color(ui_wifi, lv_color_hex(g_wifi == WIFI_FAILED ? C_WARN : C_INK), 0);
+  if (g_wifi_request < 0) {
+    const bool warn = g_wifi == WIFI_FAILED || (g_wifi == WIFI_DISABLED && (g_wifi_short || g_guard_wifi));
+    lv_obj_set_style_text_color(ui_wifi, lv_color_hex(warn ? C_WARN : C_INK), 0);
+  }
   if (g_wifi == WIFI_UP) lv_label_set_text_fmt(ui_addr, "http://%s/", WiFi.localIP().toString().c_str());
   else lv_label_set_text(ui_addr, "-");
   const bool wifi_on = g_wifi_request >= 0 ? g_wifi_request : g_wifi != WIFI_DISABLED;
@@ -289,7 +299,9 @@ static void ui_refresh_status() {
     const bool net = !g_ssid.isEmpty();
     // (no machine: an empty card, where the panel opens by itself, with Wi-Fi on)
     const char* msg =
-        !net ? (g_machine_count ? "A new machine: DOS or Linux once Wi-Fi is set up (a network on the right); ISO from "
+        g_guard_pc && g_pc_off ? "This machine was left off: the Tab5 crashed several times in a row while starting. "
+                                 "Start another machine here, or close this panel and tap POWER to try this one again."
+        : !net ? (g_machine_count ? "A new machine: DOS or Linux once Wi-Fi is set up (a network on the right); ISO from "
                                   "an installer CD's .iso at the card's root."
                                 : "No machine on the card yet: choose a Wi-Fi network on the right, then install DOS or "
                                   "Linux; or ISO, from an installer CD's .iso at the card's root.")
@@ -588,7 +600,8 @@ static void ui_cd_submit() {
   const int sel = lv_dropdown_get_selected(ui_iso_dd);
   if (sel > g_fd_iso_count) return;
   if (!cd_change(sel == 0 ? "" : ("/sdcard/" + g_fd_isos[sel - 1]).c_str())) {
-    lv_label_set_text(ui_msg, g_cd_drive < 0 ? "This PC has no CD-ROM drive" : "That image didn't open");
+    lv_label_set_text(ui_msg, g_cd_drive < 0 ? "This PC has no CD-ROM drive"
+                              : g_cd_busy ? "The card is busy with a transfer over Wi-Fi: try again" : "That image didn't open");
     lv_obj_set_style_text_color(ui_msg, lv_color_hex(C_WARN), 0);
     return;
   }

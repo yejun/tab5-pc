@@ -1,0 +1,36 @@
+Timer ticks missed while the emulator was held up are dropped since tiny386's c74cb71 (before, each was raised
+afterwards, one a call, back to back). The periods dropped are counted (pit_dropped, and pit_dropped_time: how
+long they were, in the PIT's clock), and pit_drop_missed = 0 raises them as before: to see what the dropping
+costs a guest's clock, and what the bursts cost a guest.
+
+diff --git a/i8254.c b/i8254.c
+index c4023e4..98210d7 100644
+--- a/i8254.c
++++ b/i8254.c
+@@ -34,6 +34,11 @@ static inline uint32_t pit_us_to_ticks(uint32_t us)
+ {
+ 	return ((uint64_t) us * 2562338834u) >> 31;
+ }
++/* Timer ticks missed while the emulator was held up: dropped (1), or raised one each call afterwards (0, as
++   before tiny386's c74cb71); how many periods were dropped, and how long they were (in the PIT's clock) */
++int pit_drop_missed = 1;
++uint32_t pit_dropped;
++uint64_t pit_dropped_time;
+ //#define DEBUG_PIT
+ 
+ #define RW_STATE_LSB 1
+@@ -311,8 +316,12 @@ void i8254_update_irq(PITState *pit)
+ 				   ring 0 stack runs off its page.  last_irq_count is
+ 				   a whole number of periods from the load, so the
+ 				   next interrupt stays in step with the counter. */
+-				if (d - s->last_irq_count >= 2 * s->count)
+-					s->last_irq_count = d - d % s->count - s->count;
++				if (d - s->last_irq_count >= 2 * s->count && pit_drop_missed) {
++					uint32_t to = d - d % s->count - s->count;
++					pit_dropped += (to - s->last_irq_count) / s->count;
++					pit_dropped_time += to - s->last_irq_count;
++					s->last_irq_count = to;
++				}
+ 				pit->set_irq(pit->pic, s->irq, 1);
+ 				pit->set_irq(pit->pic, s->irq, 0);
+ 				s->last_irq_count += s->count;

@@ -43,13 +43,21 @@ tools/fetch_vendor.sh            # tiny386 at the pinned commit (with the patche
 tools/build.sh upload            # build and flash (port /dev/ttyACM0; or: tools/build.sh upload /dev/ttyACM1)
 ```
 
-The BIOS (SeaBIOS) is built from the pinned source with tiny386's patch, as `vendor/patches/0027` changes it (it
-reports the math coprocessor), and the VGA BIOS comes from tiny386's release; both are checked against the tested
+The BIOS (SeaBIOS) is built from the pinned source with tiny386's patch, as `vendor/patches/0027` and `0034` change
+it (it reports the math coprocessor, and its checks for a key return with interrupts on), and the VGA BIOS comes from
+tiny386's release; both are checked against the tested
 images pinned in `vendor/bios.lock`. Building the BIOS needs a gcc that can build 32-bit x86 code (on Debian or
 Ubuntu, `gcc-multilib`). `BIOS_FROM_SOURCE=1 tools/fetch_vendor.sh` builds the VGA BIOS from source too.
 
 ESP32-P4 chips come in two families: `esptool` reports "revision v1.x" for earlier ones (the default build) and
 v3.x for later ones: `CHIP=postv3 tools/build.sh upload`. A build for the wrong family does not start.
+
+The emulator's own code runs from PSRAM, which delivers code the caches have lost several times faster than the
+flash: `tools/xip.ld` links it for an address in PSRAM, `tools/xip_patch.py` moves its bytes into the flash image after
+the link, and the firmware copies them into PSRAM when it starts (`XIP=0 tools/build.sh` builds it to run from flash,
+for comparisons). The ELF as linked is kept as `build/<chip>/tab5_386.ino.full.elf` (for disassembly and debuggers).
+The build ends by checking that nothing in the firmware uses the `tp` register, which translated code keeps for itself
+(`tools/tp_check.py`, with the toolchain's objdump).
 
 ## First start: FreeDOS on an empty card
 
@@ -176,7 +184,8 @@ Open it in a browser:
   press Done, or 30 s after the last change, the PC continues, restarted if anything changed. Do this at the DOS
   prompt, not while a program is saving.
 - The images the PC has open can't be changed while it runs: **Delete** on one offers to stop the PC first (like
-  switching it off). It stays stopped until **Start PC** restarts the Tab5.
+  switching it off). It stays stopped until **Start PC** restarts the Tab5. A folder that holds them can't be
+  deleted while the PC runs either.
 - Long file names are stored with DOS short names (`LONGNA~1.TXT`).
 - From a shell: `.venv/bin/python tools/upload.py <address> hdb /APPS ~/dos/myprog`, then
   `.venv/bin/python tools/upload.py <address> --done`.
@@ -220,6 +229,12 @@ touchpad's speed, the side panels on or off (off: the margins are black and part
 always 4:3, as on a monitor, text and 320 x 200 graphics stretched to the full height), and the machine to start or install
 ([More machines](#more-machines-dos-and-linux-side-by-side)). The top right shows the battery. While the panel is open the PC keeps running.
 
+**If the Tab5 crashes while starting**, again and again, it gets itself out: after two crashes in a row it starts
+without Wi-Fi, after four the PC is left off too and the settings panel opens, where another machine can be started
+(or POWER tries this one again); the panel says what happened. A start that has not got through after 20 seconds
+ends as a crash and counts too. Wi-Fi is also not started when too little internal memory is free for it (the panel
+says so). A start that lasts 30 seconds ends the count.
+
 ![The settings panel](docs/images/panel.png)
 
 **`tiny386.ini`** at the root of the card describes the machine (or `tiny386-N.ini`, the machine named N, if it is
@@ -246,7 +261,13 @@ More disks: `.venv/bin/python tools/dosdisk.py new sdcard/E.IMG --mb 1000` makes
 
 **The serial console** (USB): `.venv/bin/python tools/console.py "S"` prints the status; `tools/shot.py out.png`
 saves the PC's screen (`--panel`: the Tab5's). Commands are listed at the top of `firmware/tab5_386/tab5_386.ino`
-(e.g. `wifi on`, `vol <0-255>`, `reset`, `type <text>`).
+(e.g. `wifi on`, `vol <0-255>`, `reset`, `type <text>`). Some switch parts of the emulator off, to see whether a
+problem lies there: `jit 0|1` (the translator), `jit dir 0|1`, `jit grp 0|1|2`, `jit flrelax 0|1|2`, `jit rvc 0|1`,
+`jit invlpg 0|1`, `jit reval 0|1` (speed-ups of the translator, each on by default: see `firmware/tab5_386/src/t386_jit.h`
+and `t386_fast.h`), `pd 0|1` (the fast path's pre-decoded blocks), `steps auto [<us>]` or `steps <n>` (the devices
+are polled between runs of instructions that last about us microseconds, 1500 by default, or of at most n
+instructions), `pit drop 0|1` (timer ticks missed while the PC was held up are dropped, the default, or raised
+afterwards; `pit` shows how many were dropped).
 
 ## Performance
 

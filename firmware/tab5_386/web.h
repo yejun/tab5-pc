@@ -90,7 +90,7 @@ static String resolve(httpd_req_t* req, String& err) {
   String path = query(req, "path");
   if (path.isEmpty()) path = "/";
   if (!path_ok(path)) { err = "bad path"; return ""; }
-  if (path.length() > 1 && path.endsWith("/")) path.remove(path.length() - 1);
+  while (path.length() > 1 && path.endsWith("/")) path.remove(path.length() - 1);
   if (vol == "sd") return path == "/" ? String("/sdcard") : "/sdcard" + path;
   if (vol.length() == 3 && vol.startsWith("hd") && vol[2] >= 'a' && vol[2] <= 'd') {
     if (g_pc_stopped) { err = "the PC is stopped (its disks may be gone): start it first"; return ""; }
@@ -102,14 +102,137 @@ static String resolve(httpd_req_t* req, String& err) {
   return "";
 }
 
-// Is this a card file the PC has open (a disk image)? Not once it is stopped: it never touches them again.
-static bool pc_uses(const String& local) {
-  if (g_pc_stopped) return false;
-  for (int i = 0; i < 4; ++i)
-    if (g_conf.disks[i] && local.equalsIgnoreCase(g_conf.disks[i])) return true;
-  for (int i = 0; i < 2; ++i)
-    if (g_conf.fdd[i] && local.equalsIgnoreCase(g_conf.fdd[i])) return true;
-  return false;
+// Both VFS and the raw FatFs calls below address this SD_MMC volume.
+static bool card_ffpath(char (&out)[600], const char* path, size_t length) {
+  const int n = snprintf(out, sizeof(out), "%u:%.*s", SDHandle::pdrv(),
+                         (int)(length - 7), path + 7);  // skip "/sdcard"
+  return n >= 0 && (size_t)n < sizeof(out);
+}
+
+// FatFs can open a directory by its long name or its 8.3 alias. Its first cluster
+// identifies it by either name on this card (including zero for the root).
+static bool card_dir_cluster(const char* path, size_t length, DWORD& cluster) {
+  char ffpath[600];
+  FF_DIR dir;
+  if (!card_ffpath(ffpath, path, length) || f_opendir(&dir, ffpath) != FR_OK) return false;
+  cluster = dir.obj.sclust;
+  return f_closedir(&dir) == FR_OK;
+}
+
+static FRESULT card_stat(const char* path, FILINFO& info) {
+  char ffpath[600];
+  if (!card_ffpath(ffpath, path, strlen(path))) return FR_INVALID_NAME;
+  return f_stat(ffpath, &info);
+}
+
+static const char* configured_image(int slot) {
+  return slot < 4 ? g_conf.disks[slot] : g_conf.fdd[slot - 4];
+}
+
+// With a DOS alias, f_stat may return the alias itself in fname. The short
+// name identifies the entry in either spelling. exFAT has only the stored name.
+static const char* entry_name(const FILINFO& info) {
+  return *info.altname ? info.altname : info.fname;
+}
+
+// Resolve configured images once per listing, under DiskLock so a CD cannot change.
+struct ActiveImages {
+  String names[6];
+  int count = 0;
+
+  bool load(const char* dir, size_t length) {
+    if (g_pc_stopped || length < 7 || strncmp(dir, "/sdcard", 7) != 0) return true;
+    DWORD target;
+    if (!card_dir_cluster(dir, length, target)) return false;
+    for (int i = 0; i < 6; ++i) {
+      const char* image = configured_image(i);
+      if (!image || strncmp(image, "/sdcard/", 8) != 0) continue;
+      const char* leaf = image + strlen(image);
+      while (leaf > image && leaf[-1] != '/' && leaf[-1] != '\\') --leaf;
+      DWORD parent;
+      if (!card_dir_cluster(image, leaf - image - 1, parent)) return false;
+      if (parent != target) continue;
+      FILINFO info;
+      if (card_stat(image, info) != FR_OK || !names[count].concat(entry_name(info))) return false;
+      ++count;
+    }
+    return true;
+  }
+
+  bool contains(const char* name) const {
+    for (int i = 0; i < count; ++i)
+      if (names[i] == name) return true;
+    return false;
+  }
+
+  // For a listing: the names readdir gives these images (their long names), from one pass over the folder. (A
+  // lookup of every entry instead read the folder once an entry: 151 entries took 5.1 s to list, from 0.9 s.)
+  String shown[6];
+  void find_shown(const char* dir, size_t length) {
+    char ffpath[600];
+    FF_DIR d;
+    if (!count || !card_ffpath(ffpath, dir, length) || f_opendir(&d, ffpath) != FR_OK) return;
+    FILINFO info;
+    for (int left = count; left && f_readdir(&d, &info) == FR_OK && info.fname[0];) {
+      if (info.fattrib & AM_DIR) continue;
+      for (int i = 0; i < count; ++i)
+        if (shown[i].isEmpty() && names[i] == entry_name(info)) { shown[i] = info.fname; --left; break; }
+    }
+    f_closedir(&d);
+  }
+  bool shows(const char* name) const {
+    for (int i = 0; i < count; ++i)
+      if (shown[i] == name) return true;
+    return false;
+  }
+};
+
+static String g_web_free_path;   // the card file last found not to be one of the PC's images (image_access_error)
+
+// A missing destination is normal for a new upload. Other lookup failures must
+// stop the operation before an existing image could be opened or truncated.
+static const char* image_access_error(const String& path) {
+  if (g_pc_stopped) return nullptr;
+  for (int i = 0; i < 6; ++i) {
+    const char* image = configured_image(i);
+    if (image && path.equalsIgnoreCase(image)) return "the PC has this image open";
+  }
+  if (!path.startsWith("/sdcard/")) return nullptr;
+  // The path found free last time is free still: an upload's chunks each come here, and the lookups below read
+  // some twenty directory sectors (about 45 ms a chunk, an eighth of an upload's time). What the PC has open
+  // changes with a disc change alone (cd_change forgets the path; the machine's other images are for as long as
+  // the firmware runs, and a stopped PC stays stopped), and a file that is not one of its images cannot become
+  // one. (All of this with the disk lock held, as every handler and cd_change.)
+  if (path == g_web_free_path) return nullptr;
+  FILINFO info;
+  const FRESULT result = card_stat(path.c_str(), info);
+  const char* msg = nullptr;
+  // (no such file: a new upload; a folder: card_dir_deletable's)
+  if (result != FR_NO_FILE && result != FR_NO_PATH && !(result == FR_OK && (info.fattrib & AM_DIR))) {
+    ActiveImages active;
+    if (result != FR_OK || !active.load(path.c_str(), path.lastIndexOf('/')))
+      msg = "could not check whether the PC has this image open";
+    else if (active.contains(entry_name(info))) msg = "the PC has this image open";
+  }
+  if (!msg) g_web_free_path = path;
+  return msg;
+}
+
+// Check before remove_tree touches the first sibling. If a directory on the way
+// to a configured image cannot be inspected, leave the requested tree intact.
+static bool card_dir_deletable(const String& path) {
+  DWORD target;
+  if (!card_dir_cluster(path.c_str(), path.length(), target) || target == 0) return false;
+  if (g_pc_stopped) return true;
+  for (int i = 0; i < 6; ++i) {
+    const char* image = configured_image(i);
+    if (!image || strncmp(image, "/sdcard/", 8) != 0) continue;
+    for (const char* slash = strpbrk(image + 8, "/\\"); slash; slash = strpbrk(slash + 1, "/\\")) {
+      DWORD parent;
+      if (!card_dir_cluster(image, slash - image, parent) || parent == target) return false;
+    }
+  }
+  return true;
 }
 
 static void mkdirs(const String& dir) {   // every folder on the way to dir
@@ -224,6 +347,11 @@ static esp_err_t h_ls(httpd_req_t* req) {
   if (dir.isEmpty()) return send_error(req, "400 Bad Request", err);
   DIR* d = opendir(dir.c_str());
   if (!d) return send_error(req, "404 Not Found", "no such folder");
+  // (the "busy" marks are a hint for the page: where an image or an entry can't be looked up, the folder is listed
+  // without them; reading, writing and deleting check for themselves, image_access_error)
+  ActiveImages active;
+  active.load(dir.c_str(), dir.length());
+  active.find_shown(dir.c_str(), dir.length());
   String j = "[";
   bool first = true;
   while (dirent* e = readdir(d)) {
@@ -231,9 +359,10 @@ static esp_err_t h_ls(httpd_req_t* req) {
     struct stat st = {};
     const String p = dir + "/" + e->d_name;
     stat(p.c_str(), &st);
+    const bool busy = !S_ISDIR(st.st_mode) && active.shows(e->d_name);
     j += String(first ? "" : ",") + "{\"n\":" + json_str(e->d_name) + ",\"d\":" + (S_ISDIR(st.st_mode) ? "1" : "0") +
          ",\"s\":" + String((uint32_t)st.st_size) + ",\"t\":" + String((uint32_t)st.st_mtime) +
-         (pc_uses(p) ? ",\"busy\":1" : "") + "}";
+         (busy ? ",\"busy\":1" : "") + "}";
     first = false;
   }
   closedir(d);
@@ -245,7 +374,7 @@ static esp_err_t h_get(httpd_req_t* req) {
   String err;
   const String p = resolve(req, err);
   if (p.isEmpty()) return send_error(req, "400 Bad Request", err);
-  if (pc_uses(p)) return send_error(req, "409 Conflict", "the PC has this image open");
+  if (const char* msg = image_access_error(p)) return send_error(req, "409 Conflict", msg);
   FILE* f = fopen(p.c_str(), "rb");
   if (!f) return send_error(req, "404 Not Found", "no such file");
   httpd_resp_set_type(req, "application/octet-stream");
@@ -254,35 +383,34 @@ static esp_err_t h_get(httpd_req_t* req) {
   static constexpr size_t BUF = 16384;
   if (!buf) buf = (char*)heap_caps_aligned_alloc(128, BUF, MALLOC_CAP_SPIRAM);
   if (!buf) { fclose(f); return send_error(req, "500 Internal Server Error", "no memory"); }
-  size_t n;
   size_t total = 0;
   for (;;) {
     // a read that fails is tried again before the download is given up
     // (read(), not fread: through stdio's buffer the card was read 512 bytes a command, ~1.1 MB/s)
+    ssize_t got;
     for (int tries = 0;; ++tries) {
-      ssize_t got;
       {
         JitHold hold;   // (tab5_386.ino: the card's driver's cache operations on PSRAM)
         got = read(fileno(f), buf, BUF);
       }
-      n = got > 0 ? (size_t)got : 0;
       if (got >= 0 || tries == 3) break;
-      lseek(fileno(f), total, SEEK_SET);
+      const off_t pos = lseek(fileno(f), total, SEEK_SET);
+      if (pos < 0 || (size_t)pos != total) break;
       delay(1);
     }
-    if (!n) break;
-    const esp_err_t e = httpd_resp_send_chunk(req, buf, n);
+    if (got < 0) {
+      Serial.printf("web: download %s: read failed (errno %d) after %u bytes\n", p.c_str(), errno, (unsigned)total);
+      fclose(f);
+      return ESP_FAIL;
+    }
+    if (got == 0) break;
+    const esp_err_t e = httpd_resp_send_chunk(req, buf, got);
     if (e != ESP_OK) {
       Serial.printf("web: download %s: send failed (%s) after %u bytes\n", p.c_str(), esp_err_to_name(e), (unsigned)total);
       fclose(f);
       return ESP_FAIL;   // (the connection is closed: the browser sees the download fail, not a shorter file)
     }
-    total += n;
-  }
-  if (ferror(f)) {
-    Serial.printf("web: download %s: read failed (errno %d) after %u bytes\n", p.c_str(), errno, (unsigned)total);
-    fclose(f);
-    return ESP_FAIL;
+    total += got;
   }
   fclose(f);
   return httpd_resp_send_chunk(req, nullptr, 0);
@@ -293,28 +421,50 @@ static esp_err_t h_get(httpd_req_t* req) {
 // write holds it, data the server hasn't read piles up in the WiFi driver's few receive buffers (the driver stops when
 // they run out). Received at full speed, a chunk never leaves data waiting; meanwhile the browser waits for
 // the answer, so nothing arrives during the write.
-static constexpr int UPLOAD_CHUNK = 256 << 10;   // (1 MB left too little PSRAM for WiFi's packets, which stalled)
+static constexpr size_t UPLOAD_CHUNK = 256 << 10;   // (1 MB left too little PSRAM for WiFi's packets, which stalled)
 static char* g_upload_buf = nullptr;
 
+static char* upload_buffer() {
+  if (!g_upload_buf) g_upload_buf = (char*)heap_caps_aligned_alloc(128, UPLOAD_CHUNK, MALLOC_CAP_SPIRAM);
+  return g_upload_buf;
+}
+
 static esp_err_t h_put(httpd_req_t* req) {
-  const String off_s = query(req, "offset");
-  const long offset = off_s.toInt();
-  if ((int)req->content_len > UPLOAD_CHUNK) {   // (and the connection closed: its body, unread, held Wi-Fi's
+  // A body without a stated length (chunked transfer encoding, or no Content-Length at all) reaches here with
+  // content_len 0: taken for an empty upload, it emptied the file at offset 0 (up to 1.7.0).
+  if (httpd_req_get_hdr_value_len(req, "Transfer-Encoding") || !httpd_req_get_hdr_value_len(req, "Content-Length")) {
+    send_error(req, "411 Length Required", "send the chunk with its Content-Length");
+    return ESP_FAIL;   // (and the connection closed, as below: whatever body there is stays unread)
+  }
+  if (req->content_len > UPLOAD_CHUNK) {   // (and the connection closed: its body, unread, held Wi-Fi's
     send_error(req, "413 Payload Too Large", "send files in chunks of up to 256 KB (&offset=)");   // receive
     return ESP_FAIL;                                                                                // buffers)
   }
-  int got = 0;   // receive the whole chunk before touching the card
-  while (got < (int)req->content_len) {
+  // The offset: digits alone (none: 0), and the chunk's end within what fseek takes, a long (2 GB here). A
+  // negative one, or one from 2 GB on, made fseek fail, and the failure's way out deletes the file (up to 1.7.0).
+  const String off_s = query(req, "offset");
+  char* off_end;
+  const unsigned long long off_ull = strtoull(off_s.c_str(), &off_end, 10);
+  if (*off_end || (off_s.length() && !isdigit((unsigned char)off_s[0])) || off_ull > (unsigned long long)LONG_MAX - req->content_len) {
+    send_error(req, "400 Bad Request", "bad offset (a file's chunks go below 2 GB)");
+    return ESP_FAIL;
+  }
+  const long offset = (long)off_ull;
+  if (req->content_len && !upload_buffer()) {
+    send_error(req, "503 Service Unavailable", "no memory for upload");
+    return ESP_FAIL;   // close with the body unread
+  }
+  size_t got = 0;   // receive the whole chunk before touching the card
+  while (got < req->content_len) {
     const int n = httpd_req_recv(req, g_upload_buf + got, req->content_len - got);
-    if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
-    if (n <= 0) return ESP_FAIL;   // connection lost
+    if (n <= 0) return ESP_FAIL;   // disconnected or idle for the receive timeout
     got += n;
   }
   DiskLock l;
   String err;
   const String p = resolve(req, err);
   if (p.isEmpty()) return send_error(req, "400 Bad Request", err);
-  if (pc_uses(p)) return send_error(req, "409 Conflict", "the PC has this image open");
+  if (const char* msg = image_access_error(p)) return send_error(req, "409 Conflict", msg);
   if (offset == 0) mkdirs(p.substring(0, p.lastIndexOf('/')));
   bool fresh = offset == 0;
   // A big file for the card (a disk image, with its size given on the first chunk) goes where there is room for all
@@ -326,14 +476,25 @@ static esp_err_t h_put(httpd_req_t* req) {
     if (esp_vfs_fat_create_contiguous_file("/sdcard", p.c_str(), size, false) == ESP_OK) fresh = false;
   }
   FILE* f = fopen(p.c_str(), fresh ? "wb" : "r+b");
-  if (!f) return send_error(req, "500 Internal Server Error", "can't create the file (disk full, or a bad name?)");
+  if (!f) return offset ? send_error(req, "409 Conflict", "no file to go on with: its first chunk has offset 0")
+                        : send_error(req, "500 Internal Server Error", "can't create the file (disk full, or a bad name?)");
+  if (offset) {   // a chunk may follow the last one or repeat an earlier one, not leave a gap (which the card's
+    struct stat st;   // old contents would fill)
+    if (fstat(fileno(f), &st) != 0 || offset > st.st_size) {
+      fclose(f);
+      return send_error(req, "409 Conflict", "offset beyond the end of the file: send its chunks in order");
+    }
+  }
   // the card's DMA reads the buffer from PSRAM: what the CPU wrote must be there, not only in its cache (without,
   // 64-byte lines of the previous chunk ended up on the card now and then)
   bool ok;
   {
     JitHold hold;   // (tab5_386.ino: the write-back, and the card's driver's from PSRAM)
-    esp_cache_msync(g_upload_buf, (got + 127) & ~127, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
-    ok = fseek(f, offset, SEEK_SET) == 0 && fwrite(g_upload_buf, 1, got, f) == (size_t)got;
+    ok = fseek(f, offset, SEEK_SET) == 0;
+    if (ok && got) {
+      esp_cache_msync(g_upload_buf, (got + 127) & ~127, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+      ok = fwrite(g_upload_buf, 1, got, f) == got;
+    }
   }
   if (fclose(f) != 0) ok = false;
   if (!ok) {
@@ -349,9 +510,11 @@ static esp_err_t h_delete(httpd_req_t* req) {
   const String p = resolve(req, err);
   if (p.isEmpty()) return send_error(req, "400 Bad Request", err);
   if (p == "/sdcard" || p.lastIndexOf('/') == 0) return send_error(req, "400 Bad Request", "not the whole disk");
-  if (pc_uses(p)) return send_error(req, "409 Conflict", "the PC has this image open");
+  if (const char* msg = image_access_error(p)) return send_error(req, "409 Conflict", msg);
   struct stat st;
   if (stat(p.c_str(), &st) != 0) return send_error(req, "404 Not Found", "no such file or folder");
+  if (S_ISDIR(st.st_mode) && p.startsWith("/sdcard/") && !card_dir_deletable(p))
+    return send_error(req, "409 Conflict", "cannot delete this folder: it is protected or its disk-image paths could not be checked");
   if (!remove_tree(p)) return send_error(req, "500 Internal Server Error", "couldn't delete it all");
   return send_json(req, "{\"ok\":true}");
 }
@@ -367,7 +530,7 @@ static esp_err_t h_mkdir(httpd_req_t* req) {
 
 static void web_start() {
   if (g_httpd) return;
-  if (!g_upload_buf) g_upload_buf = (char*)heap_caps_aligned_alloc(128, UPLOAD_CHUNK, MALLOC_CAP_SPIRAM);
+  upload_buffer();   // reserve PSRAM before WiFi starts serving requests
   httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
   cfg.core_id = 0;
   cfg.stack_size = 10240;

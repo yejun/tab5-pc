@@ -77,8 +77,28 @@ struct ftlb_entry {
 // Two, as pages are user or supervisor ones: for privilege level 3, and for 0-2 (and without paging). A change of
 // privilege level picks the other (a protected-mode GUI may change it thousands of times a second); a change of CR0
 // or CR3 empties both.
-static struct ftlb_entry ftlb_both[2][FTLB_N];
-static struct ftlb_entry *ftlb = ftlb_both[0];   // the one in use (translated code loads it: jit_translate)
+// Before each TLB, its direct regions: runs of pages that all lie at the same distance from their linear addresses
+// in RAM (a DOS extender's program under a DPMI host with paging: a 3D game tested has its 14 MB heap in one and its
+// code, data and stack in another; a kernel's map of RAM), found in the page tables (ftlb_dir_poll). An access
+// within one needs no entry: translated code checks its address against the region its block's maker expected it in
+// (jt_ptlb: two loads, a subtraction and a branch) before it looks the page up. As an entry, a region holds what
+// the page tables said when it was made, until the TLB is emptied (CR0, CR3, a task switch: ftlb_flush) or one of
+// its pages is invalidated (INVLPG), when its pages are read again (ftlb_dir_check): the 386's rule for its own
+// TLB. Its pages are present and accessed already, and those for writes writable and dirty, so there is nothing to
+// set in the page tables; those for writes hold no translated code (jit_mark_code_page ends that when one gets
+// some).
+#define FTLB_DIRS 4
+struct ftlb_dir {
+	uword rlo, rlim;   // reads: linear addresses from rlo, rlim bytes (a page short of the run's end: any access
+	uword wlo, wlim;   // that starts there lies in it whole); writes: a part of them; rlim, wlim 0: none
+	uintptr_t add;     // at host address linear + add
+	uword pad[3];      // (32 bytes)
+};
+static struct { struct ftlb_dir dir[FTLB_DIRS]; struct ftlb_entry e[FTLB_N]; } ftlb_tabs[2];
+#define ftlb_both(k) (ftlb_tabs[k].e)
+// (from a TLB's address, where translated code has it)
+#define FTLB_DIR_OFF(i, f) ((int) offsetof(struct ftlb_dir, f) - (FTLB_DIRS - (i)) * (int) sizeof(struct ftlb_dir))
+static struct ftlb_entry *ftlb = ftlb_tabs[0].e;   // the one in use (translated code loads it: jit_translate)
 static uword ftlb_cr0 = -1, ftlb_cr3;            // what the entries were made under (CR0: FTLB_CR0 bits)
 // Without paging the entries are linear = physical, in real and protected mode alike (DOS extenders switch
 // between them for each DOS call): only paging and write protection empty them
@@ -92,7 +112,288 @@ static void (*ftlb_on_flush)(void);   // the translator's, for what it keeps by 
 
 static inline struct ftlb_entry *ftlb_for(CPUI386 *cpu)
 {
-	return ftlb_both[(cpu->cr0 & CR0_PG) && cpu->cpl == 3];
+	return ftlb_both((cpu->cr0 & CR0_PG) && cpu->cpl == 3);
+}
+
+// ---- direct regions (struct ftlb_dir)
+int t386_dir = 1;                 // serial "jit dir 0|1"
+// (t386_dir_min, t386_dir_every: variables, so that a test with few pages can set them small and get regions)
+int t386_dir_min = 64;            // pages: shorter runs are left to the TLB
+int t386_dir_every = 4000000;     // instructions between two searches of the page tables, while they find more
+#define FTLB_DIR_MIN ((uword) t386_dir_min)
+#define FTLB_DIR_WMIN ((uword) (t386_dir_min + 3) / 4)   // ... and a run's part for writes
+#define FTLB_DIR_EVERY ((u32) t386_dir_every)
+#define FTLB_DIR_AGAIN (FTLB_DIR_EVERY * 16)   // ... at most, when they don't (runs grow as a program touches its memory)
+#define FTLB_DIR_LARGE (FTLB_DIR_MIN * 8)      // pages: a new region this long is worth making the blocks again (jit_exec)
+// n pages from linear page pg, each at physical page number its own + dpg; wn of them from wpg for writes
+#define FTLB_DIR_PDES 8
+struct ftlb_run {
+	uword pg, n, dpg, wpg, wn;
+	// The page directory's entries for it as they were when its pages were last read (ftlb_dir_holds; npde 0: too
+	// many), and whether a page table of it has been written since (dirty: ftlb_dir_pt_written, told by the
+	// translator, which watches those pages' writes: watched). Clean and with the same entries, it holds without
+	// its pages being read again: 3800 of them for a 3D game, in PSRAM, a hundred times a second (its DPMI host
+	// empties the TLB twice for every interrupt), was 4% of the time.
+	u8 npde, dirty, watched;
+	u8 checks, reads;   // of its last checks after flushes (up to FTLB_DIR_TRIAL), those that read its pages again
+	u32 pde[FTLB_DIR_PDES];
+};
+// A region whose page tables are written between most flushes costs more than it saves (a big protected-mode system
+// writes its own all the time: 2000 times its 1800 pages read again while it starts, 0.4 s): after FTLB_DIR_TRIAL
+// checks with more than a quarter of them reading, it is dropped and its run left alone for FTLB_DIR_BAN instructions.
+#define FTLB_DIR_TRIAL 64
+#define FTLB_DIR_BAN 48000000u
+static struct { uword pg, n, dpg; u32 at; } ftlb_dir_banned[4];
+static unsigned ftlb_dir_nban;
+static void (*ftlb_dir_rewatch)(void);   // the translator's: the regions changed, so the page tables to watch
+static struct ftlb_run ftlb_dirs[2][FTLB_DIRS];
+static u32 ftlb_dir_reads;        // times a region's pages were read again
+static u32 ftlb_dir_wait;         // instructions until the next search: more after one that found nothing new
+static bool ftlb_dir_new;         // a large region was just found
+static u32 ftlb_dir_at;           // cpu->cycle when the page tables were last searched
+static u32 ftlb_dir_stat[4];      // searches, checks after a flush, regions that held, regions dropped (serial "jit")
+
+// Are the n bytes at physical address at in RAM? (Not at + n <= size: an entry of the page directory near the top
+// of the address space, 0xfffff021, would pass, the sum being 0.)
+static inline bool ftlb_dir_in_ram(uword at, uword n, uword size)
+{
+	return n <= size && at <= size - n;
+}
+
+// The longest runs (at most max, of FTLB_DIR_MIN pages or more) in linear pages [from, to) for TLB k (1: privilege
+// level 3) that a direct region could be: present, accessed (the page directory's entry too), the user's for
+// k = 1, in RAM that isn't a device's neighbour; and in each its longest part for writes: writable, dirty, without
+// translated code. Returns how many.
+static int ftlb_dir_scan(CPUI386 *cpu, int k, uword from, uword to, struct ftlb_run *out, int max)
+{
+	const u8 *const m = (const u8 *) cpu->phys_mem;
+	const uword size = cpu->phys_mem_size, npages = size >> 12;
+	const u32 need = k ? 0x25 : 0x21;   // P, A (U/S)
+	struct ftlb_run c = { 0, 0, 0, 0, 0 };
+	uword cw = 0, cwn = 0;   // the part for writes being counted
+	int nout = 0;
+	u32 pde = 0;
+	const u8 *pt = NULL;
+	for (uword pg = from;; pg++) {
+		bool rok = false, wok = false;
+		uword ppg = 0;
+		if (pg < to) {
+			if (pg == from || !(pg & 1023)) {
+				const uword at = (cpu->cr3 & ~0xfffu) + (pg >> 10) * 4;
+				pde = 0;
+				if (ftlb_dir_in_ram(at, 4, size)) memcpy(&pde, m + at, 4);
+				pt = (pde & need) == need && !(pde & 0x80) && ftlb_dir_in_ram(pde & ~0xfffu, 4096, size) ? m + (pde & ~0xfffu) : NULL;
+			}
+			if (pt) {
+				u32 pte;
+				memcpy(&pte, pt + (pg & 1023) * 4, 4);
+				ppg = pte >> 12;
+				rok = (pte & need) == need && ppg < npages && !(t386_pagemap[ppg] & ~3);
+				wok = rok && (pde & 2) && (pte & 0x42) == 0x42 && !t386_pagemap[ppg];
+			}
+		}
+		if (rok && c.n && ppg - pg == c.dpg) {
+			c.n++;
+		} else {
+			if (c.n >= FTLB_DIR_MIN) {   // a run ended: among the longest?
+				int at = nout;
+				if (nout == max) {
+					at = 0;
+					for (int i = 1; i < max; i++) if (out[i].n < out[at].n) at = i;
+					if (out[at].n >= c.n) at = -1;
+				} else {
+					nout++;
+				}
+				if (at >= 0) out[at] = c;
+			}
+			c.pg = pg, c.n = rok, c.dpg = ppg - pg, c.wpg = 0, c.wn = 0;
+			cwn = 0;
+		}
+		if (wok && c.n) {
+			if (!cwn) cw = pg;
+			if (++cwn > c.wn) c.wpg = cw, c.wn = cwn;
+		} else {
+			cwn = 0;
+		}
+		if (pg >= to) break;
+		if (!pt) pg |= 1023;   // nothing mapped by this entry of the page directory: on to the next
+	}
+	return nout;
+}
+
+// Slot i of TLB k as translated code reads it. The user's regions (k = 1) are the other levels' too, where those
+// have none of their own: their pages are theirs to read and write as well.
+static void ftlb_dir_set(CPUI386 *cpu, int k, int i)
+{
+	const struct ftlb_run *r = &ftlb_dirs[k][i];
+	for (int t = k; t >= 0; t--) {
+		if (t != k && ftlb_dirs[0][i].n) break;
+		struct ftlb_dir *d = &ftlb_tabs[t].dir[i];
+		d->rlim = d->wlim = 0;
+		d->rlo = r->pg << 12;
+		d->wlo = r->wpg << 12;
+		d->add = (uintptr_t) cpu->phys_mem + ((uintptr_t) r->dpg << 12);
+		d->rlim = r->n >= FTLB_DIR_MIN ? (r->n - 1) << 12 : 0;
+		d->wlim = r->n >= FTLB_DIR_MIN && r->wn >= FTLB_DIR_WMIN ? (r->wn - 1) << 12 : 0;
+	}
+	if (!k && !r->n && ftlb_dirs[1][i].n) ftlb_dir_set(cpu, 1, i);   // (its own gone: the user's again)
+}
+
+// Does run u of TLB k hold as the page tables are now? Its pages' entries read again, in order: present, accessed,
+// (the user's,) at the same distance. (What the RAM behind them is can't have changed, but for translated code:
+// ftlb_dir_code_page.) Its part for writes ends if a page of it is no longer writable and dirty.
+static bool ftlb_dir_holds(CPUI386 *cpu, int k, struct ftlb_run *u)
+{
+	const u8 *const m = (const u8 *) cpu->phys_mem;
+	const uword size = cpu->phys_mem_size;
+	const u32 need = k ? 0x25 : 0x21;
+	bool wok = true;
+	int c = 0;
+	ftlb_dir_reads++;
+	u->dirty = 0;
+	u->npde = ((u->pg + u->n - 1) >> 10) - (u->pg >> 10) + 1 <= FTLB_DIR_PDES ? ((u->pg + u->n - 1) >> 10) - (u->pg >> 10) + 1 : 0;
+	for (uword pg = u->pg, end = u->pg + u->n; pg < end;) {
+		const uword at = (cpu->cr3 & ~0xfffu) + (pg >> 10) * 4;
+		u32 pde = 0;
+		if (ftlb_dir_in_ram(at, 4, size)) memcpy(&pde, m + at, 4);
+		if ((pde & need) != need || (pde & 0x80) || !ftlb_dir_in_ram(pde & ~0xfffu, 4096, size)) return false;
+		if (u->npde) u->pde[c++] = pde;
+		const uword stop = (pg | 1023) + 1 < end ? (pg | 1023) + 1 : end;
+		const u8 *pt = m + (pde & ~0xfffu) + (pg & 1023) * 4;
+		const bool wpde = pde & 2;
+		for (; pg < stop; pg++, pt += 4) {
+			u32 pte;
+			memcpy(&pte, pt, 4);
+			if ((pte & need) != need || (pte >> 12) - pg != u->dpg) return false;
+			if (pg - u->wpg < u->wn && (!wpde || (pte & 0x42) != 0x42)) wok = false;
+		}
+	}
+	if (!wok) u->wn = 0;
+	return true;
+}
+
+// ... the page directory's entries for it the same as then?
+static bool ftlb_dir_pdes_same(CPUI386 *cpu, const struct ftlb_run *u)
+{
+	const u8 *const m = (const u8 *) cpu->phys_mem;
+	const uword at = (cpu->cr3 & ~0xfffu) + (u->pg >> 10) * 4;
+	return u->npde && ftlb_dir_in_ram(at, u->npde * 4, cpu->phys_mem_size) && !memcmp(m + at, u->pde, u->npde * 4);
+}
+
+// A write to physical page p, a page table of some region (the translator's t386_code_write): read again at the
+// next flush
+static void ftlb_dir_pt_written(uword p)
+{
+	for (int k = 0; k < 2 * FTLB_DIRS; k++) {
+		struct ftlb_run *const u = &ftlb_dirs[k / FTLB_DIRS][k % FTLB_DIRS];
+		for (int c = 0; u->n && c < u->npde; c++)
+			if (u->pde[c] >> 12 == p) u->dirty = 1;
+	}
+}
+
+// The TLB was emptied, or a region's page invalidated: each region's pages read again; one that no longer holds
+// whole is dropped (and looked for again later), and its part for writes is what it is now. Without paging nothing
+// reads them, and the write to CR0 that turns it on again comes here.
+static void ftlb_dir_check(CPUI386 *cpu)
+{
+	if (t386_dir && !(cpu->cr0 & CR0_PG)) return;
+	const bool on = t386_dir && t386_pagemap;
+	bool changed = false;
+	for (int k = 0; k < 2; k++)
+		for (int i = 0; i < FTLB_DIRS; i++) {
+			struct ftlb_run *const u = &ftlb_dirs[k][i];
+			if (!u->n) continue;
+			ftlb_dir_stat[1]++;
+			if (u->checks == FTLB_DIR_TRIAL) u->checks = u->reads = 0;
+			u->checks++;
+			if (on && u->watched && !u->dirty && ftlb_dir_pdes_same(cpu, u)) continue;   // (as it was)
+			const u8 checks = u->checks, reads = u->reads + 1;   // (ftlb_dir_holds notes the entries anew)
+			const bool costly = checks == FTLB_DIR_TRIAL && reads > FTLB_DIR_TRIAL / 4;
+			if (costly) {
+				ftlb_dir_banned[ftlb_dir_nban % 4].pg = u->pg;
+				ftlb_dir_banned[ftlb_dir_nban % 4].n = u->n;
+				ftlb_dir_banned[ftlb_dir_nban % 4].dpg = u->dpg;
+				ftlb_dir_banned[ftlb_dir_nban++ % 4].at = cpu->cycle | 1;
+			}
+			if (on && !costly && ftlb_dir_holds(cpu, k, u)) {
+				u->checks = checks, u->reads = reads;
+				ftlb_dir_stat[2]++;
+			} else {
+				ftlb_dir_stat[3]++;
+				u->n = 0;
+				ftlb_dir_wait = FTLB_DIR_EVERY;
+			}
+			changed = true;   // (its page tables may be others now)
+			ftlb_dir_set(cpu, k, i);
+		}
+	if (changed && ftlb_dir_rewatch) ftlb_dir_rewatch();
+}
+
+// Before translated code runs with paging (jit_exec): the page tables searched for runs, now and then, for the
+// privilege level it runs at. A slot whose run is found again, longer or not, keeps it (the blocks made for it
+// stay right); the rest go to the free slots, the longest first.
+static void ftlb_dir_poll(CPUI386 *cpu)
+{
+	if ((u32) cpu->cycle - ftlb_dir_at < ftlb_dir_wait) return;
+	ftlb_dir_at = cpu->cycle;
+	if (!t386_dir || !t386_pagemap || !(cpu->cr0 & CR0_PG)) return;
+	bool news = false;
+	const int k = cpu->cpl == 3;
+	if (!k) {   // (the user's regions serve these levels too: none of their own beside them)
+		bool own = false, users = false;
+		for (int i = 0; i < FTLB_DIRS; i++) own |= ftlb_dirs[0][i].n != 0, users |= ftlb_dirs[1][i].n != 0;
+		if (users && !own) return;
+	}
+	ftlb_dir_stat[0]++;
+	struct ftlb_run found[FTLB_DIRS], *const have = ftlb_dirs[k];
+	const int n = ftlb_dir_scan(cpu, k, 0, 1u << 20, found, FTLB_DIRS);
+	for (int i = 0; i < FTLB_DIRS; i++) {   // those it has: as they are now
+		if (!have[i].n) continue;
+		int f = 0;
+		while (f < n && !(found[f].n && found[f].dpg == have[i].dpg && found[f].pg <= have[i].pg &&
+				  found[f].pg + found[f].n >= have[i].pg + have[i].n)) f++;
+		if (f == n) continue;
+		if (found[f].n != have[i].n) news = true;
+		have[i] = found[f];
+		found[f].n = 0;
+		if (!ftlb_dir_holds(cpu, k, &have[i])) have[i].n = 0;   // (the page directory's entries noted)
+		ftlb_dir_set(cpu, k, i);
+	}
+	for (int j = 0; j < n; j++)   // (not those found too costly a while ago)
+		for (int b = 0; b < 4; b++)
+			if (ftlb_dir_banned[b].at && (u32) cpu->cycle - ftlb_dir_banned[b].at < FTLB_DIR_BAN &&
+			    found[j].dpg == ftlb_dir_banned[b].dpg && found[j].pg < ftlb_dir_banned[b].pg + ftlb_dir_banned[b].n &&
+			    ftlb_dir_banned[b].pg < found[j].pg + found[j].n)
+				found[j].n = 0;
+	for (int i = 0; i < FTLB_DIRS; i++) {   // the free slots
+		if (have[i].n) continue;
+		int f = -1;
+		for (int j = 0; j < n; j++) if (found[j].n && (f < 0 || found[j].n > found[f].n)) f = j;
+		if (f < 0) break;
+		have[i] = found[f];
+		found[f].n = 0;
+		news = true;
+		if (!ftlb_dir_holds(cpu, k, &have[i])) have[i].n = 0;
+		if (have[i].n >= FTLB_DIR_LARGE) ftlb_dir_new = true;
+		ftlb_dir_set(cpu, k, i);
+	}
+	if (ftlb_dir_rewatch) ftlb_dir_rewatch();
+	ftlb_dir_wait = news || !ftlb_dir_wait ? FTLB_DIR_EVERY : ftlb_dir_wait * 2 < FTLB_DIR_AGAIN ? ftlb_dir_wait * 2 : FTLB_DIR_AGAIN;
+}
+
+// Physical page p got translated code (jit_mark_code_page): no longer in a region's part for writes, nor in that of
+// the user's region as the other levels have it (ftlb_dir_set: if that copy kept the part, a kernel's store
+// to such a page of a program's would go to RAM unseen, the translated code made from it left as it was)
+static void ftlb_dir_code_page(CPUI386 *cpu, uword p)
+{
+	for (int k = 0; k < 2; k++)
+		for (int i = 0; i < FTLB_DIRS; i++) {
+			struct ftlb_run *const u = &ftlb_dirs[k][i];
+			if (u->n && u->wn && p - (u->wpg + u->dpg) < u->wn) {   // (the next check or search finds what is left)
+				u->wn = 0;
+				ftlb_dir_set(cpu, k, i);
+			}
+		}
 }
 
 static void ftlb_flush(CPUI386 *cpu)
@@ -100,12 +401,53 @@ static void ftlb_flush(CPUI386 *cpu)
 	ftlb_flushes++;
 	for (int k = 0; k < 2; k++)
 		for (int i = 0; i < FTLB_N; i++)
-			ftlb_both[k][i].rtag = ftlb_both[k][i].wtag = ftlb_both[k][i].ctag = -1;
+			ftlb_both(k)[i].rtag = ftlb_both(k)[i].wtag = ftlb_both(k)[i].ctag = -1;
 	ftlb_cr0 = cpu->cr0 & FTLB_CR0;
 	ftlb_cr3 = cpu->cr3;
 	ftlb_gen = t386_tlb_gen;
 	ftlb = ftlb_for(cpu);
+	ftlb_dir_check(cpu);
 	if (ftlb_on_flush) ftlb_on_flush();
+}
+
+// INVLPG: the page's entries go, here and in tiny386's TLB. (tiny386 emptied its whole TLB for each, and so this
+// one, and with it what the translator keeps by linear address, its jump cache and the entries from other pages:
+// Linux runs an INVLPG for every page it copies on a write after a fork.) If the translator may have such an entry
+// for code on that page (ftlb_on_invlpg: true), everything goes as before. Serial "jit invlpg 0": always.
+int t386_invlpg_page = 1;
+static u32 ftlb_invlpgs, ftlb_invlpg_all;   // INVLPGs with paging, and those that emptied everything (serial "jit")
+static unsigned t386_tlb_page_gen;          // counts those that didn't (jit_after: the block leaves)
+static bool (*ftlb_on_invlpg)(uword pg);
+static void t386_invlpg(CPUI386 *cpu, uint32_t laddr)
+{
+	const uword pg = laddr >> 12;
+	if (!(cpu->cr0 & CR0_PG)) {
+		tlb_clear(cpu);
+		return;
+	}
+	ftlb_invlpgs++;
+	if (!t386_invlpg_page || (ftlb_on_invlpg && ftlb_on_invlpg(pg))) {
+		ftlb_invlpg_all++;
+		tlb_clear(cpu);
+		return;
+	}
+	struct tlb_entry *ent = &cpu->tlb.tab[pg % tlb_size];
+	if (ent->lpgno == pg) ent->lpgno = -1;
+	cpu->ifetch.laddr = -1;
+	cpu->ifetch.paddr = 0;
+	for (int k = 0; k < 2; k++) {
+		struct ftlb_entry *e = &ftlb_both(k)[pg & (FTLB_N - 1)];
+		if (e->rtag == pg) e->rtag = -1;
+		if (e->wtag == pg) e->wtag = -1;
+		if (e->ctag == pg) e->ctag = -1;
+	}
+	t386_tlb_page_gen++;
+	for (int k = 0; k < 2 * FTLB_DIRS; k++)   // a page of a direct region: its pages are read again
+		if (pg - ftlb_dirs[k / FTLB_DIRS][k % FTLB_DIRS].pg < ftlb_dirs[k / FTLB_DIRS][k % FTLB_DIRS].n) {
+			ftlb_dirs[k / FTLB_DIRS][k % FTLB_DIRS].dirty = 1;
+			ftlb_dir_check(cpu);
+			break;
+		}
 }
 
 // Entries depend on paging (CR0, CR3) and, with paging, on whether the privilege level is 3; and they go when
@@ -126,24 +468,27 @@ static inline void ftlb_check(CPUI386 *cpu)
 // (t386_vram_epoch), the armed pages are marked once more (written since, maybe) and lose their write entries
 // (ftlb_lfb_poll, at each run of the fast path or the translator). (Before, each write came through ftlb_miss to mark
 // its piece: a quarter of the time Linux's graphics console spent printing.) With all arming slots taken, a write
-// marks its piece alone, through an entry with ctag.
+// marks its page alone, through an entry with ctag: the whole page, as the write may be the first element of a REP
+// MOVS or STOS, which goes on to the page's end (up to 1.7.0 its piece: with 2 KB pieces the page's other half
+// stayed as it was on the screen). An entry with ctag is thus not always RAM's: translated code checks
+// (t386_jit.h, jit_emit_ctagw).
 #include "t386_vga_fw.h"
 #define FTLB_LFB_ARMED 256
 static struct { struct ftlb_entry *e; uword pg; uint32_t off; } ftlb_lfb_armed[FTLB_LFB_ARMED];
 static int ftlb_lfb_narmed;
 static uint32_t ftlb_lfb_epoch;   // t386_vram_epoch when the first of them was armed
 
-// A write at off (in the frame buffer) through entry e for linear page pg: arm the page (or mark the piece)
-static void ftlb_lfb_write(struct ftlb_entry *e, uword pg, uint32_t off, int size)
+// A write at off (in the frame buffer) through entry e for linear page pg: arm the page (or just mark it)
+static void ftlb_lfb_write(struct ftlb_entry *e, uword pg, uint32_t off)
 {
+	off &= ~0xfffu;
 	if (ftlb_lfb_narmed == FTLB_LFB_ARMED) {
 		e->ctag = pg;
-		t386_vram_mark(off, size);
+		t386_vram_mark(off, 0x1000);
 		return;
 	}
 	if (!ftlb_lfb_narmed)   // (read before the mark: the renderer taking it meanwhile is then seen)
 		ftlb_lfb_epoch = __atomic_load_n(&t386_vram_epoch, __ATOMIC_ACQUIRE);
-	off &= ~0xfffu;
 	t386_vram_mark(off, 0x1000);
 	ftlb_lfb_armed[ftlb_lfb_narmed].e = e;
 	ftlb_lfb_armed[ftlb_lfb_narmed].pg = pg;
@@ -181,7 +526,7 @@ static noinline u8 *ftlb_miss(CPUI386 *cpu, uword lin, int size, int write)
 	if (write && e->ctag == pg && e->rtag == pg) {   // a page with translated code, written before
 		u8 *host = (u8 *) (uintptr_t) (lin + e->delta);
 		if ((uword) (host - t386_lfb_ram) < t386_lfb_size) {   // (the linear frame buffer)
-			ftlb_lfb_write(e, pg, host - t386_lfb_ram, size);
+			ftlb_lfb_write(e, pg, host - t386_lfb_ram);
 			return host;
 		}
 		uword paddr = host - cpu->phys_mem;
@@ -206,7 +551,7 @@ static noinline u8 *ftlb_miss(CPUI386 *cpu, uword lin, int size, int write)
 		e->delta = delta;
 		e->rtag = pg;
 		if (write)
-			ftlb_lfb_write(e, pg, paddr - t386_lfb_base + (lin & 0xfff), size);
+			ftlb_lfb_write(e, pg, paddr - t386_lfb_base);
 		return (u8 *) (uintptr_t) (lin + delta);
 	}
 	if (in_iomem(paddr) || paddr >= (uword) cpu->phys_mem_size)
@@ -855,6 +1200,9 @@ static void fast_deliver(CPUI386 *cpu, int no, bool pusherr)
 __attribute__((weak)) void t386_halt_wait(void) { usleep(1); }
 
 // tiny386's cpui386_step, through the fast path (and the translator)
+#ifdef ESP_PLATFORM
+extern int t386_step_max, t386_step_us;   // (t386_pc.c: the longest step, and how long it is to last)
+#endif
 void cpui386_step(CPUI386 *cpu, int stepcount)
 {
 	if ((cpu->flags & IF) && cpu->intr) {
@@ -872,12 +1220,33 @@ void cpui386_step(CPUI386 *cpu, int stepcount)
 		return;
 	}
 
+#ifdef ESP_PLATFORM
+	uint32_t c0, c1;
+	asm volatile("csrr %0, mcycle" : "=r"(c0));
+	const uint32_t i0 = (uint32_t) cpu->cycle;
+#endif
 	// the trap flag (a debugger's single steps): one instruction, by the fast path or tiny386, then the debug trap
 	const bool tf = cpu->flags & TF;
 #ifdef T386_JIT
 	int ret = tf ? fast_exec(cpu, 1) : jit_exec(cpu, stepcount);
 #else
 	int ret = fast_exec(cpu, tf ? 1 : stepcount);
+#endif
+#ifdef ESP_PLATFORM
+	asm volatile("csrr %0, mcycle" : "=r"(c1));
+	// steps by time: the instructions that would have taken t386_step_us at this step's speed (360 cycles a
+	// microsecond), 512 to 32768. t386_step_max drops to that at once when the guest got slower (one long step, not
+	// a run of them: 32768 instructions of the slowest code take some 30 ms), and rises to it a quarter of the way
+	// a step. A step cut short at once says little.
+	if (t386_step_us) {
+		const uint32_t ran = (uint32_t) cpu->cycle - i0, cyc = c1 - c0;
+		if (ran >= 256 && cyc) {
+			uint64_t want = (uint64_t) ran * (uint32_t) (t386_step_us * 360) / cyc;
+			if (want < 512) want = 512;
+			if (want > 32768) want = 32768;
+			t386_step_max = (int) want < t386_step_max ? (int) want : (t386_step_max * 3 + (int) want + 3) / 4;
+		}
+	}
 #endif
 	cpu->ifetch.paddr = 0;
 	if (!ret) {

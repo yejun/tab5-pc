@@ -46,15 +46,17 @@ def remote_size(host, vol, dest):   # the size of a file there, 0 if none
 
 def put_file(host, vol, dest, src, resume=False):
     size = os.path.getsize(src)
-    off = remote_size(host, vol, dest) // CHUNK * CHUNK if resume else 0
-    if off >= size:
-        off = 0 if size else off
+    existing = remote_size(host, vol, dest) if resume else 0
+    # Only offset zero truncates the destination. Equal sizes do not prove a match.
+    off = existing // CHUNK * CHUNK if 0 < existing < size else 0
     if off:
         print(f"  {dest}: on from {off} bytes", flush=True)
     with open(src, "rb") as f:
         f.seek(off)
         while True:
-            data = f.read(CHUNK)
+            data = f.read(min(CHUNK, size - off))
+            if not data and off < size:
+                sys.exit(f"{src}: source ended early at {off} of {size} bytes")
             params = {"vol": vol, "path": dest, "offset": off}
             if off == 0:
                 params["size"] = size   # (a big file for the card goes where it fits in one piece)

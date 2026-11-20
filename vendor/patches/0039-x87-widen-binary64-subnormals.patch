@@ -1,0 +1,12 @@
+--- a/fpu.c
++++ b/fpu.c
+@@ -41,7 +41,8 @@
+ 		// zero or subnormal
+ 		if (mant80 != 0) {
+ 			// subnormal
+-			int shift = 64 - __builtin_ffsll(mant80);
++			/* Move the highest set significand bit to the explicit integer bit. */
++			int shift = __builtin_clzll(mant80);
+ 			mant80 <<= shift;
+ 			exp += BIAS80 - BIAS64 + 1 - shift;
+ 		}

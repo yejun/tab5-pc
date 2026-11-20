@@ -2,7 +2,7 @@ i8254: microseconds to timer ticks with a multiply and a shift instead of a 64-b
 32-bit host, three times per timer check); pc.c's PC_STEP_COUNT can be set by the includer.
 
 diff --git a/i8254.c b/i8254.c
-index 4444556..3c7297c 100644
+index 99a5caf..c4023e4 100644
 --- a/i8254.c
 +++ b/i8254.c
 @@ -27,6 +27,13 @@
@@ -47,7 +47,7 @@ index 4444556..3c7297c 100644
  	case 2:
  	case 3:
 diff --git a/pc.c b/pc.c
-index 9fe093d..fe1f867 100644
+index 5073c5f..64b1dcc 100644
 --- a/pc.c
 +++ b/pc.c
 @@ -135,7 +135,9 @@ static void cpu_enable_fpu(CPUABS *cpu)

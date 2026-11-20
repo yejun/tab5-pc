@@ -1,0 +1,70 @@
+--- a/fpu.c
++++ b/fpu.c
+@@ -445,8 +445,7 @@
+ }
+ 
+ /* an arithmetic result in the precision control's precision: single rounds the significand to 24 bits in the
+-   rounding mode, keeping the exponent's range as the x87's registers do (doubles hold more than 2 * 24 + 2 bits, so
+-   the result of single operands is the x87's) */
++   rounding mode, keeping the wider exponent range of the register. */
+ static double fpprec(FPU *fpu, double x)
+ {
+ 	if ((fpu->cw & 0x300) != 0 || sizeof(x) != 8)
+@@ -469,6 +468,41 @@
+ 	return v.d;
+ }
+ 
++/* x is the host's nearest binary64 sum. At a 24-bit rounding boundary its
++ * discarded part matters: round-to-odd at binary64 before rounding to 24. */
++static double fpsum24(FPU *fpu, int group, double a, double b, double x)
++{
++	if (group == 4)
++		b = -b;  /* a - b */
++	if (group == 5)
++		a = -a;  /* b - a */
++
++	union union64 sum = { .f = x };
++	unsigned exp = (sum.i >> 52) & 0x7ff;
++	if (exp == 0x7ff)
++		return x;
++	if (x == 0) {
++		if (signbit(a) != signbit(b) && ((fpu->cw >> 10) & 3) == 1)
++			return -0.0;
++		return x;
++	}
++	/* A subnormal sum of binary64 operands is exact. Normalize before
++	 * limiting its significand to 24 bits, then undo the scaling. */
++	if (exp == 0)
++		return fpprec(fpu, x * 0x1p54) * 0x1p-54;
++	if ((sum.i & 0xfffffff) == 0) {  /* a 24-bit value or a midpoint */
++		/* FastTwoSum: subtract the larger addend first, exactly. */
++		double tail = fabs(a) >= fabs(b) ? b - (x - a) : a - (x - b);
++		if (tail != 0) {
++			if ((tail > 0) == (x > 0))
++				sum.i++;
++			else
++				sum.i--;
++		}
++	}
++	return fpprec(fpu, sum.f);
++}
++
+ /* a NaN result as the x87 makes it: an operand's NaN, made quiet, or the "real indefinite" (negative) one (hosts
+    give their own: RISC-V's is positive, without the operand's sign) */
+ static double fpnan(double c, double a, double b)
+@@ -688,7 +722,14 @@
+ 	if (group == 3) {
+ 		fppop(fpu);
+ 	} else if (group != 2) {
+-		fpset(fpu, d, fpprec(fpu, fpnan(c, a, b)));
++		c = fpnan(c, a, b);
++		if ((fpu->cw & 0x300) == 0 && sizeof(c) == 8) {
++			if (group == 0 || group == 4 || group == 5)
++				c = fpsum24(fpu, group, a, b, c);
++			else
++				c = fpprec(fpu, c);
++		}
++		fpset(fpu, d, c);
+ 	}
+ }
+ 

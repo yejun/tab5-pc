@@ -5,7 +5,8 @@
 // is heard: it is what drains the Sound Blaster's buffer, and programs wait for the interrupt that follows. So while
 // the speaker plays, the speaker's queue sets the pace; while it is off, a timer does.
 // The speaker (amplifier) is switched on when a block isn't silent and off again AUDIO_OFF_MS after the last sound:
-// the amplifier alone (audio_amp). The I2S channel and the codec start once, at boot (audio_setup), before Wi-Fi:
+// the amplifier alone (audio_amp). The I2S channel and the codec start once, at boot (audio_setup: the codec then set
+// up a second time with its clocks running, audio_spk_restart), before Wi-Fi:
 // started with each sound, they took their DMA descriptors from DMA-capable internal RAM each time, of which Wi-Fi
 // leaves a few hundred bytes now and then, and then failed ("i2s_alloc_dma_desc ... failed", "speaker: begin failed"
 // every block): noise, at what sounded like the wrong pitch, instead of the sound.
@@ -29,6 +30,8 @@ struct AudioStats { uint32_t blocks, played, underruns, mix_max_us, peak; bool o
 static AudioStats g_astats = {};
 static int16_t* g_abuf[AUDIO_BUFS];
 static bool g_spk_started = false;   // M5.Speaker began at boot (its I2S channel kept)
+static int8_t g_codec_start = 0;     // the codec set up again at boot (audio_setup): 1 done, -1 no answer on I2C
+static bool audio_spk_restart();
 
 // The Tab5's amplifier (bit 1 of the PI4IOE5V6408 at 0x43, register 5, as M5Unified's Tab5 speaker callback); under
 // g_i2c_lock
@@ -108,22 +111,35 @@ static void audio_setup() {
   sc.task_pinned_core = 0;   // core 1 is the PC's
   sc.task_priority = 5;
   M5.Speaker.config(sc);
-  for (auto& b : g_abuf) b = (int16_t*)heap_caps_calloc(AUDIO_BLOCK * 2, sizeof(int16_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  // (in PSRAM: the 12 KB are internal RAM Wi-Fi needs to start, and the speaker's task only copies them out)
+  for (auto& b : g_abuf) b = (int16_t*)heap_caps_calloc(AUDIO_BLOCK * 2, sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   g_spk_started = M5.Speaker.begin();   // (its DMA descriptors now, before Wi-Fi takes that RAM)
-  if (g_spk_started) audio_amp(false);
-  else Serial.println("speaker: begin failed");
+  if (!g_spk_started) { Serial.println("speaker: begin failed"); return; }
+  audio_amp(false);
+  // The codec keeps its power over a restart of the Tab5 (a machine switch, a flash, a crash) with its clocks cut
+  // while it ran, and begin() sets it up from whatever state that left: now and then all sound then had noise in
+  // it, or none came, until the Tab5 was switched off. So at every start it is set up again the way serial "spk
+  // restart" does it, which wants the clocks running: a block of silence starts them (M5Unified starts the I2S
+  // channel at the first sound and leaves it on).
+  if (g_abuf[0]) {
+    M5.Speaker.playRaw(g_abuf[0], AUDIO_BLOCK * 2, AUDIO_RATE, true, 1, AUDIO_CH);
+    for (int i = 0; i < 200 && M5.Speaker.isPlaying(AUDIO_CH); ++i) delay(1);
+    delay(10);
+  }
+  g_codec_start = audio_spk_restart() ? 1 : -1;
 }
 
 static void audio_start() {   // once the PC exists
   xTaskCreatePinnedToCore(audio_task, "audio", 4096, nullptr, 4, nullptr, 0);
 }
 
-// Serial "spk restart": the speaker codec (ES8388) set up again, its I2S stream running on: powered down in order
-// (muted, DAC and outputs off, chip off), then reset and configured as M5Unified's Tab5 speaker callback does. A
-// codec left running by a restart of the Tab5 or a flash starts the next time from where it was, and once in a
-// while all sound then crackled until the Tab5 was switched off. (Not M5.Speaker's end() and begin(): begin takes
-// its DMA buffers anew, and with Wi-Fi on there is no such RAM left: no sound until the next start.)
-static void audio_spk_restart() {
+// At every start (audio_setup) and serial "spk restart": the speaker codec (ES8388) set up again, its I2S stream
+// running on: powered down in order (muted, DAC and outputs off, chip off), then reset and configured as
+// M5Unified's Tab5 speaker callback does. A codec left running by a restart of the Tab5 or a flash starts the next
+// time from where it was, and once in a while all sound then crackled until the Tab5 was switched off. (Not
+// M5.Speaker's end() and begin(): begin takes its DMA buffers anew, and with Wi-Fi on there is no such RAM left: no
+// sound until the next start.)
+static bool audio_spk_restart() {
   static constexpr uint8_t ES = 0x10;
   static constexpr uint8_t setup[][2] = {   // (M5Unified.inl, the Tab5's _speaker_enabled_cb)
     {0, 0x80}, {0, 0x00}, {0, 0x00}, {0, 0x0E}, {1, 0x00}, {2, 0x0A}, {3, 0xFF}, {4, 0x3C}, {5, 0x00}, {6, 0x00},
@@ -146,6 +162,7 @@ static void audio_spk_restart() {
   if (amp) audio_amp(true);
   xSemaphoreGive(g_i2c_lock);
   Serial.printf("speaker: codec %s\n", ok ? "set up again" : "didn't answer on I2C");
+  return ok;
 }
 
 // serial "codec": the ES8388's registers (0-52, as hex), and the amplifier's bit (PI4IOE5V6408 0x43 register 5 bit 1)
@@ -163,6 +180,8 @@ static void audio_codec_report() {
     for (int k = i; k < i + 16 && k < 53; ++k) n += snprintf(line + n, sizeof line - n, " %02x", r[k]);
     Serial.println(line);
   }
-  Serial.printf("codec: amplifier %s, speaker %s, sound %s, volume %u\n", io & 2 ? "on" : "off",
-                g_spk_started ? "started" : "not started", g_astats.on ? "playing" : "idle", g_volume);
+  Serial.printf("codec: amplifier %s, speaker %s (set up again at the start: %s), sound %s, volume %u\n",
+                io & 2 ? "on" : "off", g_spk_started ? "started" : "not started",
+                g_codec_start > 0 ? "yes" : g_codec_start < 0 ? "no answer" : "no", g_astats.on ? "playing" : "idle",
+                g_volume);
 }

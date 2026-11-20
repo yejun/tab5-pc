@@ -1,0 +1,48 @@
+--- a/fpu.c
++++ b/fpu.c
+@@ -345,12 +345,24 @@
+ 	// set tw
+ }
+ 
++/* A host conversion can replace any NaN with its positive canonical NaN.
++ * Widen the guest sign and payload explicitly, quieting a signaling input. */
++static double fp32_to_double(u32 bits)
++{
++	union union32 single = { .i = bits };
++	if ((bits & 0x7fffffff) <= 0x7f800000)
++		return single.f;
++	union union64 wide = { .i = (uint64_t) (bits >> 31) << 63 | UINT64_C(0x7ff8000000000000) |
++		(uint64_t) (bits & 0x7fffff) << 29 };
++	return wide.f;
++}
++
+ static bool fploadf32(void *cpu, int seg, uword addr, double *res)
+ {
+-	union union32 u;
+-	if(!cpu_load32(cpu, seg, addr, &u.i))
+-		return false;
+-	*res = u.f;
++	u32 bits;
++	if (!cpu_load32(cpu, seg, addr, &bits))
++		return false;
++	*res = fp32_to_double(bits);
+ 	return true;
+ }
+ 
+@@ -428,8 +440,14 @@
+ /* val rounded to single precision in the x87 rounding mode rc (0 nearest, 1 down, 2 up, 3 toward zero) */
+ static float f32_round(double x, int rc)
+ {
+-	float f = x;
+-	if (rc == 0 || isnan(x) || (double) f == x)
++	union union32 single = { .f = x };
++	if ((single.i & 0x7fffffff) > 0x7f800000) {
++		F80 src = tof80(x);
++		single.i = ((u32) (src.high >> 15) << 31) | 0x7fc00000 | ((src.mant1 >> 8) & 0x7fffff);
++		return single.f;
++	}
++	float f = single.f;
++	if (rc == 0 || (double) f == x)
+ 		return f;
+ 	bool above = (double) f > x;
+ 	if ((rc == 1 && above) || (rc == 2 && !above) || (rc == 3 && (x >= 0 ? above : !above)))

@@ -7,7 +7,7 @@ SeaBIOS patch sets the equipment word's bit from it in place of never. (vendor/b
 tools/build_seabios.sh.)
 
 diff --git a/pc.c b/pc.c
-index 653a0d9..c5223f3 100644
+index 2824521..70db33c 100644
 --- a/pc.c
 +++ b/pc.c
 @@ -810,6 +810,8 @@ PC *pc_new(SimpleFBDrawFunc *redraw, void *redraw_data,
