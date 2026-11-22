@@ -1,0 +1,204 @@
+--- a/fpu.c
++++ b/fpu.c
+@@ -311,29 +311,6 @@
+ 	fpu->empty &= ~(1u << i);
+ }
+ 
+-static bool fpgeti64(FPU *fpu, int64_t *res)
+-{
+-	if (fpu->rawtagw & (1 << fpu->top))
+-		return false;
+-	F80 f = fpu->rawst[fpu->top];
+-	int exp = f.high & 0x7fff, neg = f.high >> 15;
+-	uint64_t m = (uint64_t) f.mant1 << 32 | f.mant0;
+-	if (m == 0 && exp == 0) {
+-		*res = 0;
+-		return true;
+-	}
+-	if (!(m >> 63) || exp < 16383 || exp > 16383 + 63)
+-		return false;
+-	int shift = 16383 + 63 - exp;
+-	if (shift && (m << (64 - shift)))	/* not an integer */
+-		return false;
+-	uint64_t u = m >> shift;
+-	if (u >> 63 && (!neg || u != (uint64_t) 1 << 63))	/* beyond the range */
+-		return false;
+-	*res = neg ? (int64_t) -u : (int64_t) u;
+-	return true;
+-}
+-
+ static int swapbits(int v, int i, int j)
+ {
+ 	if (((v >> i) ^ (v >> j)) & 1) {
+@@ -782,30 +759,52 @@
+ 	return x;
+ }
+ 
+-static bool fpstorei16(void *cpu, int seg, uword addr, double val)
+-{
+-	s16 v = val < 32768.0 && val >= -32768.0 ? (s16) val : 0x8000;
+-	if (!cpu_store16(cpu, seg, addr, v))
+-		return false;
+-	return true;
+-}
+-
+-static bool fpstorei32(void *cpu, int seg, uword addr, double val)
++static F80 fpvalue80(FPU *fpu, int i)
+ {
+-	s32 v = val < 2147483648.0 && val >= -2147483648.0 ? (s32) val : 0x80000000;
+-	if (!cpu_store32(cpu, seg, addr, v))
+-		return false;
+-	return true;
++	F80 v;
++	if (!fpgetraw(fpu, i, &v)) v = tof80(fpget(fpu, i));
++	return v;
+ }
+ 
+-static bool fpstorei64(void *cpu, int seg, uword addr, double val)
++/* Round the full source once. The indefinite bit pattern is also the valid
++ * signed minimum, so carry the exception separately from the stored bits. */
++static uint64_t fp_integer_bits(FPU *fpu, int width, unsigned rc, u16 *flags)
+ {
+-	int64_t v = val < 9223372036854775808.0 && val >= -9223372036854775808.0 ?
+-		(int64_t) val : 0x8000000000000000ll;
+-	if (!cpu_store32(cpu, seg, addr, v))
+-		return false;
+-	if (!cpu_store32(cpu, seg, addr + 4, v >> 32))
+-		return false;
++	F80 v = fpvalue80(fpu, 0);
++	uint64_t m = (uint64_t)v.mant1 << 32 | v.mant0;
++	int exp = v.high & 0x7fff;
++	bool negative = v.high >> 15;
++	uint64_t limit = UINT64_C(1) << (width - 1);
++	uint64_t mag = m;
++	bool inexact = false;
++	if (exp <= 16383 + width - 1 && (!exp || (m >> 63))) {
++		int shift = 16383 + 63 - (exp ? exp : 1);
++		if (shift > 0) {
++			mag = fp_round_shift(m, shift, rc, negative);
++			inexact = shift >= 64 ? m != 0 : (m << (64 - shift)) != 0;
++		}
++		if (mag < limit || (negative && mag == limit)) {
++			*flags = inexact ? 0x20 : 0;
++			return negative ? -mag : mag;
++		}
++	}
++	*flags = 1;
++	return limit;
++}
++
++static bool fpstore_integer(FPU *fpu, void *cpu, int seg, uword addr, int width, int group)
++{
++	unsigned rc = group == 1 ? 3 : (fpu->cw >> 10) & 3; /* FISTTP truncates */
++	u16 flags;
++	uint64_t bits = fp_integer_bits(fpu, width, rc, &flags);
++	if (width == 16) {
++		if (!cpu_store16(cpu, seg, addr, bits)) return false;
++	} else {
++		if (!cpu_store32(cpu, seg, addr, bits)) return false;
++		if (width == 64 && !cpu_store32(cpu, seg, addr + 4, bits >> 32)) return false;
++	}
++	fpu->sw |= flags;
++	if (group != 2) fppop(fpu);
+ 	return true;
+ }
+ 
+@@ -940,13 +939,6 @@
+ 	else fparith(fpu, group, d, fpget(fpu, 0), fpget(fpu, i));
+ }
+ 
+-static F80 fpvalue80(FPU *fpu, int i)
+-{
+-	F80 v;
+-	if (!fpgetraw(fpu, i, &v)) v = tof80(fpget(fpu, i));
+-	return v;
+-}
+-
+ static unsigned fptag(F80 v)
+ {
+ 	unsigned exp = v.high & 0x7fff;
+@@ -1122,19 +1114,7 @@
+ 		case 1: // FISTTP int32
+ 		case 2: // FIST int32
+ 		case 3: // FISTP int32
+-		{
+-			a = fpget(fpu, 0);
+-			if (group != 1) {
+-				int rc = (fpu->cw >> 10) & 3;
+-				a = fpround(a, rc);
+-			}
+-			if (!fpstorei32(cpu, seg, addr, a)) {
+-				return false;
+-			}
+-			if (group != 2)
+-				fppop(fpu);
+-			break;
+-		}
++			return fpstore_integer(fpu, cpu, seg, addr, 32, group);
+ 		case 4:
+ 			cpu_setexc(cpu, 6, 0);
+ 			return false;
+@@ -1184,14 +1164,8 @@
+ 			fppush(fpu, a);
+ 			break;
+ 		}
+-		case 1: { // FISTTP int64
+-			a = fpget(fpu, 0);
+-			if (!fpstorei64(cpu, seg, addr, a)) {
+-				return false;
+-			}
+-			fppop(fpu);
+-			break;
+-		}
++		case 1: // FISTTP int64
++			return fpstore_integer(fpu, cpu, seg, addr, 64, group);
+ 		case 2: { // FST float64
+ 			if (!fpstoref64(cpu, seg, addr, fpstore64_bits(fpu))) {
+ 				return false;
+@@ -1249,19 +1223,7 @@
+ 		case 1: // FISTTP int16
+ 		case 2: // FIST int16
+ 		case 3: // FISTP int16
+-		{
+-			a = fpget(fpu, 0);
+-			if (group != 1) {
+-				int rc = (fpu->cw >> 10) & 3;
+-				a = fpround(a, rc);
+-			}
+-			if (!fpstorei16(cpu, seg, addr, a)) {
+-				return false;
+-			}
+-			if (group != 2)
+-				fppop(fpu);
+-			break;
+-		}
++			return fpstore_integer(fpu, cpu, seg, addr, 16, group);
+ 		case 4: { // FBLD
+ 			if (!fploadbcd(fpu, cpu, seg, addr))
+ 				return false;
+@@ -1281,23 +1243,8 @@
+ 			fppop(fpu);
+ 			break;
+ 		}
+-		case 7: { // FISTP int64
+-			int64_t v;
+-			if (fpgeti64(fpu, &v)) {
+-				if (!cpu_store32(cpu, seg, addr, v) || !cpu_store32(cpu, seg, addr + 4, (uint64_t) v >> 32))
+-					return false;
+-				fppop(fpu);
+-				break;
+-			}
+-			int rc = (fpu->cw >> 10) & 3;
+-			a = fpget(fpu, 0);
+-			a = fpround(a, rc);
+-			if (!fpstorei64(cpu, seg, addr, a)) {
+-				return false;
+-			}
+-			fppop(fpu);
+-			break;
+-		}
++		case 7: // FISTP int64
++			return fpstore_integer(fpu, cpu, seg, addr, 64, group);
+ 		}
+ 		break;
+ 	}

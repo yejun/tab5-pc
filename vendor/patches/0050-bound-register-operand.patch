@@ -1,0 +1,14 @@
+BOUND with a register operand raises #UD (its second operand is a pair of bounds in memory); it was
+taken as a memory operand. Upstream: tiny386 a6a7893.
+
+--- a/i386.c
++++ b/i386.c
+@@ -3795,7 +3795,7 @@
+ 	} \
+ 	cpu->cc.mask &= ~ZF;
+ 
+-#define GvMa GvM
++#define GvMa GvMp
+ #define BOUND_helper(BIT, a, b, la, sa, lb, sb) \
+ 	OptAddr meml1, meml2; \
+ 	s ## BIT idx = la(a); \

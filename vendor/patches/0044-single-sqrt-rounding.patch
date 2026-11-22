@@ -1,0 +1,40 @@
+--- a/fpu.c
++++ b/fpu.c
+@@ -550,6 +550,28 @@
+ 	return sizeof(double) == 8 ? v.d : c;
+ }
+ 
++static double fpsqrt(FPU *fpu, double x)
++{
++	double root = fpnan(sqrt(x), x, 0);
++	if ((fpu->cw & 0x300) != 0 || sizeof(root) != 8)
++		return root;
++	union union64 r = { .f = root };
++	if ((r.i & 0xfffffff) == 0 && x > 0 && isfinite(x)) {
++		/* A 24-bit value or midpoint has at most 25 significand bits.
++		 * Its square is exact in binary64 after scaling to a safe exponent.
++		 * Recover the side of the boundary lost to the host sqrt. */
++		int e;
++		double m = frexp(root, &e);
++		double input = ldexp(x, -2 * e);
++		double square = m * m;
++		if (input > square)
++			r.i++;
++		else if (input < square)
++			r.i--;
++	}
++	return fpprec(fpu, r.f);
++}
++
+ static bool fpstoref32(void *cpu, int seg, uword addr, double val, int rc)
+ {
+ 	union union32 u = { .f = f32_round(val, rc) };
+@@ -1347,7 +1369,7 @@
+ 				fppop(fpu);
+ 				break;
+ 			case 2: // FSQRT
+-				fpset(fpu, 0, fpprec(fpu, fpnan(sqrt(temp), temp, 0)));
++				fpset(fpu, 0, fpsqrt(fpu, temp));
+ 				break;
+ 			case 3: { // FSINCOS
+ 				double s, c;

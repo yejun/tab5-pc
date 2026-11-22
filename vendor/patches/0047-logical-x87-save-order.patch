@@ -1,0 +1,115 @@
+--- a/fpu.c
++++ b/fpu.c
+@@ -880,6 +880,29 @@
+ 	}
+ }
+ 
++/* Keep the temporary register image off the ordinary arithmetic path. */
++static __attribute__((noinline)) bool fprestore(FPU *fpu, void *cpu, bool opsz16, int seg, uword addr)
++{
++	u16 cw, sw;
++	if (!cpu_load16(cpu, seg, addr, &cw) ||
++	    !cpu_load16(cpu, seg, addr + (opsz16 ? 2 : 4), &sw))
++		return false;
++	uword start = addr + (opsz16 ? 14 : 28);
++	F80 regs[8];
++	for (int j = 0; j < 8; j++, start += 10) {
++		if (!cpu_load32(cpu, seg, start, &regs[j].mant0) ||
++		    !cpu_load32(cpu, seg, start + 4, &regs[j].mant1) ||
++		    !cpu_load16(cpu, seg, start + 8, &regs[j].high))
++			return false;
++	}
++	/* The image starts with ST(0), relative to the restored TOP. */
++	fpu->cw = cw;
++	setsw(fpu, sw);
++	for (int j = 0; j < 8; j++)
++		fpsetraw(fpu, j, regs[j]);
++	return true;
++}
++
+ bool fpu_exec2(FPU *fpu, void *cpu, bool opsz16, int op, int group, int seg, uword addr)
+ {
+ 	double a;
+@@ -1072,44 +1095,8 @@
+ 			fppop(fpu);
+ 			break;
+ 		}
+-		case 4: { // FRSTOR
+-			uword start = addr;
+-			if (opsz16) {
+-				if (!cpu_load16(cpu, seg, addr, &(fpu->cw)))
+-					return false;
+-				u16 sw;
+-				if (!cpu_load16(cpu, seg, addr + 2, &sw))
+-					return false;
+-				setsw(fpu, sw);
+-				start += 14;
+-			} else {
+-				if (!cpu_load16(cpu, seg, addr, &(fpu->cw)))
+-					return false;
+-				u16 sw;
+-				if (!cpu_load16(cpu, seg, addr + 4, &sw))
+-					return false;
+-				setsw(fpu, sw);
+-				start += 28;
+-			}
+-			for (int j = 0; j < 8; j++) {
+-				if (!cpu_load32(cpu, seg, start,
+-						&fpu->rawst[j].mant0))
+-					return false;
+-				if (!cpu_load32(cpu, seg, start + 4,
+-						&fpu->rawst[j].mant1))
+-					return false;
+-				if (!cpu_load16(cpu, seg, start + 8,
+-						&fpu->rawst[j].high))
+-					return false;
+-				fpu->rawtagr &= ~(1 << j);
+-				fpu->rawtagw &= ~(1 << j);
+-#ifdef T386_FPU_SINGLES
+-				fpu->sv &= ~(1 << j);
+-#endif
+-				start += 10;
+-			}
+-			break;
+-		}
++		case 4: // FRSTOR
++			return fprestore(fpu, cpu, opsz16, seg, addr);
+ 		case 5:
+ 			cpu_setexc(cpu, 6, 0);
+ 			return false;
+@@ -1134,27 +1121,14 @@
+ 					return false;
+ 				start += 28;
+ 			}
+-#ifdef T386_FPU_SINGLES
+-			for (int j = 0; j < 8; j++)
+-				if (fpu->sv & (1 << j))
+-					fpu->st[j] = T386_FPU_SINGLES(fpu->sb[j]);
+-			fpu->sv = 0;
+-#endif
+-			for (int j = 0; j < 8; j++) {
+-				if (fpu->rawtagw & (1 << j)) {
+-					fpu->rawst[j] = tof80(fpu->st[j]);
+-					fpu->rawtagw &= ~(1 << j);
+-				}
+-				if (!cpu_store32(cpu, seg, start,
+-						 fpu->rawst[j].mant0))
+-					return false;
+-				if (!cpu_store32(cpu, seg, start + 4,
+-						 fpu->rawst[j].mant1))
+-					return false;
+-				if (!cpu_store16(cpu, seg, start + 8,
+-						 fpu->rawst[j].high))
+-					return false;
+-				start += 10;
++			for (int j = 0; j < 8; j++, start += 10) {
++				F80 reg;
++				if (!fpgetraw(fpu, j, &reg))
++					reg = tof80(fpget(fpu, j));
++				if (!cpu_store32(cpu, seg, start, reg.mant0) ||
++				    !cpu_store32(cpu, seg, start + 4, reg.mant1) ||
++				    !cpu_store16(cpu, seg, start + 8, reg.high))
++					return false;
+ 			}
+ 			fpu->sw = 0;
+ 			fpu->top = 0;

@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.8.0 (2026-11-22)
 
-Faster, mostly in the translator and under paging, with the emulator's own code in PSRAM, and a number of fixes.
+Faster, mostly in the translator and under paging, with the emulator's own code in PSRAM, a fix for a crash, x87
+results closer to a real x87, and a number of other fixes.
 tiny386 is at c74cb71 (was 2c1205c).
 
 Speed since 1.7.0, measured on a Tab5:
@@ -16,6 +17,8 @@ Speed since 1.7.0, measured on a Tab5:
 
 Fixed:
 
+- A guest program that read port 43h (the timer's control word) crashed the Tab5 at the next timer interrupt. The
+  read gives FFh now (the control word is write only).
 - A Tab5 set to start with Wi-Fi on could restart over and over (too little internal memory left for Wi-Fi's
   driver). Wi-Fi is not started without enough memory now, and a Tab5 that crashes or hangs while starting gets
   itself out: Wi-Fi left off after two crashes in a row, the PC too after four, a start stuck for 20 s ended as a
@@ -30,6 +33,11 @@ Fixed:
 - x87: register and double stores keep or round from all 80 bits, NaNs keep their sign and payload through single
   precision, double subnormals widen exactly, FBLD loads all 18 digits, and sums, products and quotients at 24-bit
   precision round as an x87 does.
+- x87 results closer to a real x87: square roots at 24-bit precision and arithmetic at 53-bit precision round as an
+  x87 does (the directed rounding modes too); FBSTP stores all 18 digits; FSAVE and FRSTOR keep the registers in stack
+  order; empty registers are tracked (stack faults give the masked result and the right tags); FIST and FISTP set the
+  invalid and inexact flags.
+- BOUND with a register operand raises the invalid-opcode exception instead of reading memory.
 - ROL and ROR by 32, 64... leave the flags alone; BT, BTS, BTR and BTC on memory take a register's bit number as
   signed; translated shifts of memory by CL = 0 read the operand.
 - The VGA status register (3DAh) shows horizontal blanking: a game that waits for it before each palette write

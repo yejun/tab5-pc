@@ -2062,13 +2062,19 @@ static bool jx_on;
 static int jx_d;
 static s8 jx_reg[8];
 static u8 jx_dirty, jx_refc[JX_POOL];
+struct JxTags { u8 empty, full; };   // changes relative to TOP at run entry
+static struct JxTags jx_tags;
 static u32 jx_d0(void)   // the pool register of each slot, 4 bits each (15: none)
 {
 	u32 d = 0;
 	for (int r = 7; r >= 0; r--) d = d << 4 | (jx_reg[r] < 0 ? 15u : (u32) jx_reg[r]);
 	return d;
 }
-static u32 jx_d1(void) { return jx_dirty | (u32) (jx_d & 7) << 8; }
+// The stub carries the dirty slots, net TOP movement and both occupancy masks in a single word.
+static u32 jx_d1(void)
+{
+	return jx_dirty | (u32) (jx_d & 7) << 8 | (u32) jx_tags.empty << 11 | (u32) jx_tags.full << 19;
+}
 
 static JStub *jt_stub(int kind)
 {
@@ -3345,8 +3351,8 @@ void t386_fpu_ld_i32(FPU *fpu, u32 v);
 void t386_fpu_ld_i16(FPU *fpu, u32 v);
 u32 t386_fpu_st_f32(FPU *fpu);
 uint64_t t386_fpu_st_f64(FPU *fpu);
-u32 t386_fpu_st_i32(FPU *fpu);
-u32 t386_fpu_st_i16(FPU *fpu);
+uint64_t t386_fpu_st_i32(FPU *fpu);   // (the value, a0; the flags to set after the store, a1)
+uint64_t t386_fpu_st_i16(FPU *fpu);
 void t386_fpu_set_cw(FPU *fpu, u32 cw);
 u32 t386_fpu_get_cw(FPU *fpu);
 void t386_fpu_reg(FPU *fpu, u32 op_group, u32 i);
@@ -3502,6 +3508,78 @@ static void jt_fpu_set_top(int r)   // TOP = r & 7 (r changed)
 	e_andi(r, r, 7);
 	e_sw(r, A0, jt_fl.top);
 }
+// Test logical slots before any guest effects. Only the exceptional path needs the scalar fault handlers.
+static u32 *jt_fpu_tag_guard(u8 full, u8 empty)
+{
+	if (full & empty) return e_jump();
+	if (!full && empty == 0x80) {   // (a push's register alone, the most frequent: the byte's sign)
+		e_lb(T6, A0, jt_fl.empty);
+		return e_branch(BGE, T6, X0);
+	}
+	e_lbu(T6, A0, jt_fl.empty);
+	e_andi(T6, T6, full | empty);
+	if (!empty) return e_branch(BNE, T6, X0);
+	if (!full && !(empty & (empty - 1))) return e_branch(BEQ, T6, X0);
+	e_li(T1, empty);
+	return e_branch(BNE, T6, T1);
+}
+
+static void jt_fpu_guard_one(u8 full, u8 empty)
+{
+	if (!jt_fl.sb) t386_fpu_layout(&jt_fl);
+	e_lw(A0, R_CPU, CPU_OFF(fpu));
+	JStub *st = jt_stub(STUB_EXIT);
+	st->at = jt_fpu_tag_guard(full, empty);
+}
+
+// What the block's code so far has established about the registers, as a check that passed or as an instruction's
+// effect (bit i: ST(i), TOP as it is now): nothing at the block's start, nor after an instruction whose effect is
+// not followed here. A check for what is known already is left out (most of them: straight-line x87 code pushes
+// into the register it popped a moment ago, and reads what it pushed). An instruction's failed check leaves the
+// block (STUB_EXIT), so code after it runs only when it passed.
+static u8 jt_tk_full, jt_tk_empty;
+struct JtTagUse { u8 full, empty, fill; s8 d; bool known; };   // needs; ST(i) filled; TOP's move (-1: a push)
+static void jt_tk_apply(const struct JtTagUse *u)
+{
+	if (!u->known) {
+		jt_tk_full = jt_tk_empty = 0;
+		return;
+	}
+	jt_tk_full = (jt_tk_full & ~u->empty) | u->full | u->fill;
+	jt_tk_empty = (jt_tk_empty | u->empty) & ~(u->full | u->fill);
+	if (u->d < 0) {   // a push: ST(0) holds something now, whatever it is
+		jt_tk_full = (u8) (jt_tk_full << 1) | 1;
+		jt_tk_empty = (u8) (jt_tk_empty << 1);
+	}
+	for (int k = 0; k < u->d; k++) {   // pops: the register left is empty
+		jt_tk_full >>= 1;
+		jt_tk_empty = jt_tk_empty >> 1 | 0x80;
+	}
+}
+static void jt_fpu_guard_use(const struct JtTagUse *u)
+{
+	u8 full = u->full, empty = u->empty;
+	if (!(full & empty) && !(full & jt_tk_empty) && !(empty & jt_tk_full)) {   // (else: it fails, as it must)
+		full &= ~jt_tk_full;
+		empty &= ~jt_tk_empty;
+	}
+	if (full | empty) jt_fpu_guard_one(full, empty);
+	jt_tk_apply(u);
+}
+
+// Update occupancy after all checks and memory accesses have succeeded. A0 still points to the FPU.
+static void jt_fpu_tag_change(int delta, u8 fill)
+{
+	e_lbu(T6, A0, jt_fl.empty);
+	if (fill) e_andi(T6, T6, ~fill);
+	if (delta < 0) e_slli(T6, T6, 1);
+	if (delta > 0) {
+		e_srli(T6, T6, 1);
+		e_ori(T6, T6, 0x80);
+	}
+	e_sb(T6, A0, jt_fl.empty);
+}
+
 static void jt_fpu_nz(int r)   // the helper unless r is a normal single or a zero
 {
 	e_slli(T6, r, 1);
@@ -5321,6 +5399,65 @@ static const void *jt_fpu_reg_fn(int esc, int g)
 	       esc == 5 && g == 2 ? (const void *) t386_fpu_fst_reg : esc == 5 && g == 3 ? (const void *) t386_fpu_fstp_reg :
 	       (const void *) t386_fpu_reg;
 }
+// What a translated x87 instruction needs of the registers and does to them (K_FPU's ways, in their order);
+// known false: not followed (jit_h_fpu's instructions, and the register forms t386_fpu_reg does but for the compares)
+static bool jt_fpu_reg_form(int esc, int g, int i);
+static struct JtTagUse jt_fpu_tag_use(const JIns *in)
+{
+	struct JtTagUse u = { 0, 0, 0, 0, true };
+	const int esc = in->op - 0xd8, g = in->reg, i = in->rm;
+	if (in->mod != 3) {
+		switch (jt_fpu_form(esc, g).how) {
+		case FF_LD: u.empty = 0x80; u.d = -1; break;
+		case FF_ARITH: u.full = 1; u.d = g == 3; break;   // (group 3: FCOMP, FICOMP)
+		case FF_ARITHG: case FF_ST: u.full = 1; break;
+		case FF_STP: u.full = 1; u.d = 1; break;
+		case FF_LDCW: case FF_STCW: break;
+		default: u.known = false;
+		}
+		return u;
+	}
+	if (jt_fpu_reg_form(esc, g, i)) {
+		const void *fn = jt_fpu_reg_fn(esc, g);
+		if (esc == 1 && g == 5 && (i == 0 || i == 6)) u.empty = 0x80, u.d = -1;   // FLD1, FLDZ
+		else if (fn == (const void *) t386_fpu_fld_reg) u.full = 1u << i, u.empty = 0x80, u.d = -1;
+		else if (fn == (const void *) t386_fpu_fst_reg || fn == (const void *) t386_fpu_fstp_reg)
+			u.full = 1, u.fill = 1u << i, u.d = fn == (const void *) t386_fpu_fstp_reg;
+		else if (fn != (const void *) t386_fpu_reg) u.full = 1 | 1u << i, u.d = esc == 6;   // arithmetic (DE: popped), FXCH
+		// t386_fpu_reg's own: a compare takes an empty register as it comes (flags, and its pops all the same)
+		else if ((esc == 0 && g == 2) || (esc == 5 && g == 4) || (esc == 1 && g == 4 && i >= 4)) ;   // FCOM FUCOM FTST FXAM
+		else if ((esc == 0 && g == 3) || (esc == 5 && g == 5)) u.d = 1;   // FCOMP FUCOMP
+		else if (esc == 6 && g == 3 && i == 1) u.d = 2;   // FCOMPP
+		else if (esc == 1 && g == 4) u.fill = 1;   // FCHS FABS: ST(0) holds something after them, whatever it was
+		else if (esc == 1 && g == 5) u.d = -1;   // the other constants: a push, checked by t386_fpu_reg itself
+		else u.known = false;
+		return u;
+	}
+	if (!(in->op == 0xdf && g == 4 && i == 0)) u.known = false;   // (FNSTSW AX: nothing)
+	return u;
+}
+// FIST / FISTP's inexact flag. The source is a finite single below 2^30. If it had a fraction, the rounded
+// integer fits exactly in a single. Otherwise converting back recovers the source.
+// d = 20h if a fraction went, else 0: for after the store, as the helpers give it (a1)
+static void jt_fist_inexact(int d, int src, int rounded)
+{
+	e_fcvt_s_w(1, rounded);
+	e_feq_s(d, src, 1);
+	e_xori(d, d, 1);
+	e_slli(d, d, 5);
+}
+// the flag set here (a run's code, after its store)
+static void jt_fist_precision(int src, int rounded)
+{
+	e_fcvt_s_w(1, rounded);
+	e_feq_s(T6, src, 1);
+	u32 *exact = e_branch(BNE, T6, X0);
+	e_lhu(T6, A0, jt_fl.sw);
+	e_ori(T6, T6, 0x20);
+	e_sh(T6, A0, jt_fl.sw);
+	j_bind(exact, jp);
+}
+
 // in's quick code (a memory operand in a1 already; a value to store left in a0), its helper's call after it for the
 // rest (jt_fpu_slow); false, nothing made: in has none
 static bool jt_fpu_core(const JIns *in, bool make)
@@ -5351,6 +5488,7 @@ static bool jt_fpu_core(const JIns *in, bool make)
 			e_sw(A1, A5, jt_fl.sb);
 			jt_fpu_mark(A3);
 			jt_fpu_set_top(A3);
+			jt_fpu_tag_change(-1, 0);
 			jt_fpu_slow(ff.fn, -1, -1);
 			return true;
 		}
@@ -5369,6 +5507,7 @@ static bool jt_fpu_core(const JIns *in, bool make)
 			e_sw(A1, A5, jt_fl.sb);
 			jt_fpu_mark(A3);
 			jt_fpu_set_top(A3);
+			jt_fpu_tag_change(-1, 0);
 			jt_fpu_slow(ff.fn, -1, -1);
 			return true;
 		}
@@ -5395,6 +5534,7 @@ static bool jt_fpu_core(const JIns *in, bool make)
 			jt_fslow_if(BEQ, T6, X0);
 			e_fmv_w_x(0, A2);
 			e_fcvt_w_s(A0, 0, jt_x87_rm[(jt_x87_cw >> 10) & 3]);
+			jt_fist_inexact(A1, 0, A0);
 			jt_fpu_slow(ff.fn, -1, -1);
 			return true;
 		}
@@ -5411,6 +5551,7 @@ static bool jt_fpu_core(const JIns *in, bool make)
 		e_sw(T0, A5, jt_fl.sb);
 		jt_fpu_mark(A3);
 		jt_fpu_set_top(A3);
+		jt_fpu_tag_change(-1, 0);
 		return true;
 	}
 	const void *fn = jt_fpu_reg_fn(esc, g);
@@ -5430,6 +5571,7 @@ static bool jt_fpu_core(const JIns *in, bool make)
 		if (esc == 6) {
 			e_addi(A3, A3, 1);
 			jt_fpu_set_top(A3);
+			jt_fpu_tag_change(1, 0);
 		}
 	} else if (fn == (const void *) t386_fpu_fxch_reg) {   // both kept as singles, swapped
 		if (!make) return true;
@@ -5455,6 +5597,7 @@ static bool jt_fpu_core(const JIns *in, bool make)
 		e_sw(T0, A5, jt_fl.sb);
 		jt_fpu_mark(A3);
 		jt_fpu_set_top(A3);
+		jt_fpu_tag_change(-1, 0);
 	} else if (fn == (const void *) t386_fpu_fst_reg || fn == (const void *) t386_fpu_fstp_reg) {
 		// FST(P) ST(i): ST(0) kept as a single, copied
 		if (!make) return true;
@@ -5465,6 +5608,7 @@ static bool jt_fpu_core(const JIns *in, bool make)
 		jt_fpu_sb(X0, A1, A6);
 		e_sw(A2, A1, jt_fl.sb);
 		jt_fpu_mark(A6);
+		jt_fpu_tag_change(g == 3, 1u << i);
 		if (g == 3) {
 			e_addi(A3, A3, 1);
 			jt_fpu_set_top(A3);
@@ -7052,8 +7196,10 @@ static JIT_SMALL void jt_emit(const JIns *in)
 		e_sw(T6, A0, 0);
 #endif
 		const struct JitFpuForm ff = in->mod != 3 ? jt_fpu_form(b - 0xd8, in->reg) : (struct JitFpuForm) { FF_NONE, 0, NULL };
+		const struct JtTagUse tu = jt_fpu_tag_use(in);
 		if (ff.how != FF_NONE) {
 			jt_fpu_nm();
+			jt_fpu_guard_use(&tu);
 			const int words = ff.bytes == 8 ? 2 : 1, wbytes = ff.bytes == 8 ? 4 : ff.bytes;
 			// the operand: into a1 (a2), FF_ARITH's into a2 (a3)
 			if (ff.how == FF_ARITH || ff.how == FF_ARITHG || ff.how == FF_LD || ff.how == FF_LDCW) {
@@ -7088,14 +7234,25 @@ static JIT_SMALL void jt_emit(const JIns *in)
 					jt_ea(in, 4 * w);
 					jt_store(A2 + w, wbytes);
 				}
+				// FIST / FISTP: the flags (a1: invalid, inexact) now that the value is written. Before the store
+				// they would be set at a page fault's handler too, where the x87 is as before the instruction.
+				const bool ist = ff.fn == (const void *) t386_fpu_st_i32 || ff.fn == (const void *) t386_fpu_st_i16;
+				if (ist) {
+					if (!jt_fl.sb) t386_fpu_layout(&jt_fl);
+					e_lw(A0, R_CPU, CPU_OFF(fpu));
+					e_lhu(T6, A0, jt_fl.sw);
+					e_or(T6, T6, A1);
+					e_sh(T6, A0, jt_fl.sw);
+				}
 				if (ff.how == FF_STP) {   // (t386_fpu_pop's: TOP + 1)
 					if (!jt_fl.sb) t386_fpu_layout(&jt_fl);
 					const int top = jt_fl.top;
-					e_lw(A0, R_CPU, CPU_OFF(fpu));
+					if (!ist) e_lw(A0, R_CPU, CPU_OFF(fpu));
 					e_lw(T6, A0, top);
 					e_addi(T6, T6, 1);
 					e_andi(T6, T6, 7);
 					e_sw(T6, A0, top);
+					jt_fpu_tag_change(1, 0);
 				}
 			}
 			jt_pf = PF_NONE;
@@ -7103,12 +7260,14 @@ static JIT_SMALL void jt_emit(const JIns *in)
 		}
 		if (in->mod == 3 && jt_fpu_reg_form(b - 0xd8, in->reg, in->rm)) {   // register forms: t386_fpu_reg
 			jt_fpu_nm();
+			const int esc = b - 0xd8, g = in->reg;
+			const void *fn = jt_fpu_reg_fn(esc, g);
+			jt_fpu_guard_use(&tu);
 			if (!jt_fpu_call_core(in, routine)) {   // (the arithmetic and the stack moves by their own helpers)
-				const int esc = b - 0xd8, g = in->reg;
 				e_lw(A0, R_CPU, CPU_OFF(fpu));
 				e_li(A1, esc << 3 | g);
 				e_li(A2, in->rm);
-				e_call_abs(jt_fpu_reg_fn(esc, g));
+				e_call_abs(fn);
 			}
 			jt_pf = PF_NONE;
 			break;
@@ -7127,6 +7286,7 @@ static JIT_SMALL void jt_emit(const JIns *in)
 			jt_pf = PF_NONE;
 			break;
 		}
+		jt_tk_apply(&tu);   // (jit_h_fpu: not followed)
 		if (in->mod != 3) {
 			JIns t = *in;
 			t.seg = SEG_DS;
@@ -7593,7 +7753,10 @@ void t386_jit_x87_wb(u32 d0, u32 d1)   // (jit_r_x87wb, the pool's registers in 
 	}
 	f[jt_fl.sv] = sv;
 	f[jt_fl.rawtagw] = rw;
-	*(u32 *) (f + jt_fl.top) = (top0 + ((d1 >> 8) & 7)) & 7;
+	unsigned d = (d1 >> 8) & 7;
+	u8 empty = (f[jt_fl.empty] | (u8)(d1 >> 11)) & ~(u8)(d1 >> 19);
+	f[jt_fl.empty] = (empty >> d) | (empty << (8 - d));
+	*(u32 *) (f + jt_fl.top) = (top0 + d) & 7;
 	t386_jit_x87_wbs++;
 
 }
@@ -7855,7 +8018,7 @@ static int jx_i0;   // (the run's first instruction)
 static struct JxCold {
 	int k; bool first, write;
 	u32 *br[3], *resume;
-	s8 reg[8]; u8 dirty; int d;
+	s8 reg[8]; u8 dirty; int d; struct JxTags tags;
 } jx_cold[JX_MAX_COLD];
 static int jx_ncold;
 static bool jx_cold_add(int k, bool first, bool write, u32 *b0, u32 *b1, u32 *b2)
@@ -7865,6 +8028,7 @@ static bool jx_cold_add(int k, bool first, bool write, u32 *b0, u32 *b1, u32 *b2
 	c->k = k; c->first = first; c->write = write;
 	c->br[0] = b0; c->br[1] = b1; c->br[2] = b2;
 	memcpy(c->reg, jx_reg, sizeof jx_reg);
+	c->tags = jx_tags;
 	c->dirty = jx_dirty;
 	c->d = jx_d;
 	return true;
@@ -7957,6 +8121,7 @@ static void jx_emit_cold(int n)
 		const JIns *in = &jt_ins[x->k];
 		for (int b = 0; b < 3; b++) j_bind(x->br[b], jp);
 		memcpy(jx_reg, x->reg, sizeof jx_reg);
+		jx_tags = x->tags;
 		jx_dirty = x->dirty;
 		jx_d = x->d;
 		jx_on = true;
@@ -7972,6 +8137,36 @@ static void jx_emit_cold(int n)
 	}
 }
 
+// Write the run's net effect once. Bits proved unchanged by the entry guard have already been removed.
+static void jx_store_tags(int d, struct JxTags tags)
+{
+	d &= 7;
+	if (!d && !tags.full && !tags.empty) return;
+	// (n pushes and no more, or n pops: a shift)
+	if (d && !tags.empty && tags.full == (u8) (0xff << d)) {
+		e_lbu(T6, A0, jt_fl.empty);
+		e_slli(T6, T6, 8 - d);
+		e_sb(T6, A0, jt_fl.empty);
+		return;
+	}
+	if (d && !tags.full && tags.empty == (1u << d) - 1) {
+		e_lbu(T6, A0, jt_fl.empty);
+		e_srli(T6, T6, d);
+		e_ori(T6, T6, (u8) (0xff << (8 - d)));
+		e_sb(T6, A0, jt_fl.empty);
+		return;
+	}
+	e_lbu(T6, A0, jt_fl.empty);
+	if (tags.full) e_andi(T6, T6, ~tags.full);
+	if (tags.empty) e_ori(T6, T6, tags.empty);
+	if (d) {
+		e_slli(T1, T6, 8 - d);
+		e_srli(T6, T6, d);
+		e_or(T6, T6, T1);
+	}
+	e_sb(T6, A0, jt_fl.empty);
+}
+
 // Translate jt_ins[i0..e] (jx_run_end) as an x87 run, then the same instructions' usual code for when it can't
 static void jx_run(int i0, int e, int n)
 {
@@ -7979,21 +8174,23 @@ static void jx_run(int i0, int e, int n)
 	struct JxOp ops[JIT_MAX_INS];
 	// the slots read before they are written (loaded at the start), and whether the control word matters
 	u8 needin = 0, written = 0;
+	struct JxTags need = {0}, changed = {0}, after[JIT_MAX_INS];
+	bool possible = true;
 	bool cw = false;
 	int d = 0;
 	for (int k = i0; k <= e; k++) {
 		struct JxOp *o = &ops[k - i0];
 		jx_classify(&jt_ins[k], o);
 		const int s0 = d & 7, si = (d + o->i) & 7;
-		u8 rd = 0, wr = 0;
+		u8 rd = 0, wr = 0, push = 0;
 		switch (o->kind) {
 		case XO_ARITHM: rd = 1 << s0; wr = 1 << s0; cw = true; break;
-		case XO_FLDM: case XO_FILDM: case XO_FLDC: d--; wr = 1 << (d & 7); break;
+		case XO_FLDM: case XO_FILDM: case XO_FLDC: d--; push = wr = 1 << (d & 7); break;
 		case XO_FSTM: rd = 1 << s0; break;
 		case XO_FISTM: rd = 1 << s0; cw = true; break;
 		case XO_ARITHR: rd = 1 << s0 | 1 << si; wr = 1 << (o->esc ? si : s0); cw = true; break;
 		case XO_FXCH: rd = wr = 1 << s0 | 1 << si; break;
-		case XO_FLDR: rd = 1 << si; d--; wr = 1 << (d & 7); break;
+		case XO_FLDR: rd = 1 << si; d--; push = wr = 1 << (d & 7); break;
 		case XO_FSTR: rd = 1 << s0; wr = 1 << si; break;
 		case XO_FCOMM: rd = 1 << s0; break;
 		case XO_FCOMR: rd = 1 << s0 | 1 << si; break;
@@ -8001,9 +8198,24 @@ static void jx_run(int i0, int e, int n)
 		}
 		needin |= rd & ~written;
 		written |= wr;
+		// Check initial slots only until their first fill or free. Stack slots can contain holes.
+		u8 popped = o->pop ? 1u << s0 : 0;
+		if (o->pop == 2) popped |= 1u << ((s0 + 1) & 7);
+		if ((rd & changed.empty) || (push & changed.full)) possible = false;
+		need.full |= rd & ~changed.full;
+		need.empty |= push & ~changed.empty;
+		changed.full = (changed.full | wr) & ~popped;
+		changed.empty = (changed.empty & ~wr) | popped;
+		after[k - i0] = changed;
 		d += o->pop;
 	}
 	jt_flags_store();   // (the old code's calls may change the registers the pending flags are in)
+	u32 *whole[3] = {0}, *done = NULL, *entry[JIT_MAX_INS];
+	jx_ndeopt = 0;
+	// (what the block has established already is not checked again; the run's instructions' usual code, made
+	// below from the same start, leaves what is known after the run: no more than this code establishes)
+	if (!possible || (need.full & need.empty) || (need.full & jt_tk_empty) || (need.empty & jt_tk_full))
+		goto ordinary;
 	jx_group(i0, e, ops);
 	jx_i0 = i0;
 	jx_ncold = 0;
@@ -8012,7 +8224,8 @@ static void jx_run(int i0, int e, int n)
 	jt_no_redo = false;
 	jt_fpu_nm();
 	e_lw(A0, R_CPU, CPU_OFF(fpu));
-	u32 *whole[2] = { NULL, NULL };
+	if ((need.full & ~jt_tk_full) || (need.empty & ~jt_tk_empty))
+		whole[2] = jt_fpu_tag_guard(need.full & ~jt_tk_full, need.empty & ~jt_tk_empty);
 	if (cw) {   // the control word's precision and rounding as translated (single: jt_fpu_single)
 		e_lhu(T6, A0, jt_fl.cw);
 		e_srli(T6, T6, 8);
@@ -8037,7 +8250,7 @@ static void jx_run(int i0, int e, int n)
 		if (needin >> r & 1) jx_set(r, jx_alloc());
 	if (needin) jx_slots_io(needin, false);
 	jx_dirty = 0;
-	jx_ndeopt = 0;
+	jx_tags = (struct JxTags){0};
 	jx_on = true;
 	for (int k = i0; k <= e; k++) {
 		const JIns *in = &jt_ins[k];
@@ -8094,6 +8307,7 @@ static void jx_run(int i0, int e, int n)
 			jx_fail(e_branch(BEQ, T6, X0), k);
 			e_fcvt_w_s(A2, jx_f(0), jt_x87_rm[(jt_x87_cw >> 10) & 3]);
 			jx_store(in, k, i0);
+			jt_fist_precision(jx_f(0), A2);
 			if (o->pop) jx_d++;
 			break;
 		case XO_ARITHR:
@@ -8144,6 +8358,9 @@ static void jx_run(int i0, int e, int n)
 			jt_set_r(0, T2, 16, false);   // (it uses t6 and a6)
 			break;
 		}
+		jx_tags = after[k - i0];
+		jx_tags.full &= ~need.full;
+		jx_tags.empty &= ~need.empty;
 	}
 	jx_on = false;
 	// the end: the slots written back, sv and rawtagw for them, TOP
@@ -8153,13 +8370,14 @@ static void jx_run(int i0, int e, int n)
 		e_andi(T6, T6, 7);
 		e_sw(T6, A0, jt_fl.top);
 	}
-	u32 *done = e_jump();
+	jx_store_tags(jx_d, jx_tags);
+	done = e_jump();
 	jx_emit_cold(n);
-	// the usual code of the same instructions: from the start (whole), or from a failed check's instruction
-	u32 *entry[JIT_MAX_INS];
+ordinary:
+	// The usual code from the start, or from the instruction whose check failed.
 	for (int k = i0; k <= e; k++) {
 		entry[k - i0] = jp;
-		if (k == i0) { j_bind(whole[0], jp); j_bind(whole[1], jp); }
+		if (k == i0) { j_bind(whole[0], jp); j_bind(whole[1], jp); j_bind(whole[2], jp); }
 		jt_refund = n - k;
 		jt_cur_eip = jt_ins[k].eip;
 		jt_no_redo = false;
@@ -8374,6 +8592,7 @@ static JIT_SMALL JitBlock *jit_translate_n(CPUI386 *cpu, uword eip, uword lin, u
 	jt_pf = PF_NONE;
 	jt_pf_stored = false;
 	jt_x87_nm_ok = false;
+	jt_tk_full = jt_tk_empty = 0;
 	jt_seg_pending = -1;
 	jt_mode = mode;
 	jt_x87_cw = cpu->fpu ? t386_fpu_get_cw(cpu->fpu) : 0x37f;
@@ -8430,6 +8649,7 @@ static JIT_SMALL JitBlock *jit_translate_n(CPUI386 *cpu, uword eip, uword lin, u
 		switch (jt_ins[i].kind) {   // (those that may change CR0: jt_fpu_nm)
 		case K_INTERP: case K_PMFAR: case K_JMPF: case K_CALLF: case K_RETF: case K_FARIND: case K_INT: case K_IRET:
 			jt_x87_nm_ok = false;
+			jt_tk_full = jt_tk_empty = 0;   // (the interpreter's instruction may be anything)
 		}
 		if (i && jt_is_sti(&jt_ins[i - 1]) && !jt_ins[i].ends) {   // an interrupt waiting since STI: now
 			e_lbu(T6, R_CPU, CPU_OFF(intr));

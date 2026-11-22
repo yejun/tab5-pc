@@ -1,0 +1,116 @@
+--- a/fpu.c
++++ b/fpu.c
+@@ -651,6 +651,20 @@
+ 	return true;
+ }
+ 
++/* Round m / 2^shift (shift >= 1) in the guest mode. At shift 64 the
++ * leading bit is the half unit; beyond it every nonzero input is below half. */
++static uint64_t fp_round_shift(uint64_t m, int shift, unsigned rc, bool negative)
++{
++	uint64_t kept = shift < 64 ? m >> shift : 0;
++	uint64_t lost = shift < 64 ? m - (kept << shift) : m;
++	bool increment = lost && rc == (negative ? 1u : 2u);
++	if (rc == 0 && shift <= 64) {
++		uint64_t half = UINT64_C(1) << (shift - 1);
++		increment = lost > half || (lost == half && (kept & 1));
++	}
++	return kept + increment;
++}
++
+ /* Encode a raw x87 significand directly, so guard and sticky bits survive until
+  * the memory store applies the guest rounding mode. */
+ static uint64_t raw_f64_bits(F80 v, unsigned rc)
+@@ -679,17 +693,10 @@
+ 	/* For subnormal results, include the extra shift in this same rounding.
+ 	 * At shift 64 only the top bit reaches halfway; beyond it none can. */
+ 	int shift = biased > 0 ? 11 : 12 - biased;
+-	uint64_t kept = shift < 64 ? m >> shift : 0;
+-	uint64_t lost = shift < 64 ? m - (kept << shift) : m;
+-	bool increment = away && lost;
+-	if (rc == 0 && shift <= 64) {
+-		uint64_t half = UINT64_C(1) << (shift - 1);
+-		increment = lost > half || (lost == half && (kept & 1));
+-	}
+-	/* kept includes the implicit bit for normal values. Addition propagates
++	/* The rounded significand includes the implicit bit for normal values. Addition propagates
+ 	 * a carry across the subnormal/normal and finite/infinity boundaries. */
+ 	uint64_t base = biased > 0 ? (uint64_t)(biased - 1) << 52 : 0;
+-	return sign | (base + kept + increment);
++	return sign | (base + fp_round_shift(m, shift, rc, sign != 0));
+ }
+ 
+ static uint64_t fpstore64_bits(FPU *fpu)
+@@ -771,28 +778,39 @@
+ 	return true;
+ }
+ 
+-static bool fpstorebcd(void *cpu, int seg, uword addr, double val)
+-{
+-	int64_t v = val < 9223372036854775808.0 && val >= -9223372036854775808.0 ?
+-		(int64_t) val : 0x8000000000000000ll;
+-	int sign = 0;
+-	if (v < 0) {
+-		sign = 1;
+-		v = -v;
+-	}
+-
+-	for (int i = 0; i < 9; i++) {
+-		int res = (v % 10) | ((v / 10) % 10) << 4;
+-		v /= 100;
+-		if (!cpu_store8(cpu, seg, addr + i, res))
++static bool fpstorebcd(FPU *fpu, void *cpu, int seg, uword addr)
++{
++	F80 raw;
++	if (!fpgetraw(fpu, 0, &raw))
++		raw = tof80(fpget(fpu, 0));
++
++	const uint64_t limit = UINT64_C(1000000000000000000);
++	uint64_t m = (uint64_t)raw.mant1 << 32 | raw.mant0;
++	int exp = raw.high & 0x7fff;
++	bool negative = (raw.high >> 15) != 0;
++	uint64_t magnitude = limit;
++	/* 10^18 lies in [2^59, 2^60). Check the decimal limit after rounding.
++	 * A nonzero exponent with no integer bit is an unsupported encoding. */
++	if (exp <= 16383 + 59 && (!exp || (m >> 63))) {
++		unsigned rc = (fpu->cw >> 10) & 3;
++		magnitude = fp_round_shift(m, 16383 + 63 - (exp ? exp : 1), rc, negative);
++	}
++
++	u8 bytes[10] = {0};
++	if (magnitude >= limit) {
++		bytes[7] = 0xc0;
++		bytes[8] = bytes[9] = 0xff;  /* packed-decimal indefinite */
++	} else {
++		for (int i = 0; i < 9; i++) {
++			unsigned pair = magnitude % 100;
++			bytes[i] = (pair / 10 << 4) | (pair % 10);
++			magnitude /= 100;
++		}
++		bytes[9] = negative ? 0x80 : 0;  /* also when rounded to zero */
++	}
++	for (int i = 0; i < 10; i++)
++		if (!cpu_store8(cpu, seg, addr + i, bytes[i]))
+ 			return false;
+-	}
+-
+-	int res = (v % 10) | ((v / 10) % 10) << 4;
+-	if (sign)
+-		res |= 0x80;
+-	if (!cpu_store8(cpu, seg, addr + 9, res))
+-		return false;
+ 	return true;
+ }
+ 
+@@ -1196,10 +1214,7 @@
+ 			break;
+ 		}
+ 		case 6: { // FBSTP
+-			int rc = (fpu->cw >> 10) & 3;
+-			a = fpget(fpu, 0);
+-			a = fpround(a, rc);
+-			if (!fpstorebcd(cpu, seg, addr, a)) {
++			if (!fpstorebcd(fpu, cpu, seg, addr)) {
+ 				return false;
+ 			}
+ 			fppop(fpu);

@@ -229,6 +229,8 @@ static bool t386_fparith_fast(struct FPU *fpu, int group, unsigned d, double a, 
 }
 #endif
 
+// K_FPU guards the stack before calling these helpers (including calls from shared routines).
+// On a failed guard the interpreter performs the entire instruction, including any faulting memory access.
 // ---- the frequent memory forms
 static inline double t386_f64(uint32_t lo, uint32_t hi) { union union64 u = { .i = (uint64_t) hi << 32 | lo }; return u.f; }
 
@@ -283,7 +285,7 @@ void t386_fpu_ld_f32(FPU *fpu, uint32_t bits)
 {
 	if (t386_nz_f32(bits)) {
 		T386_FS(FS_LD32_HIT);
-		fpu->top = (fpu->top - 1) & 7;
+		fppush_slot(fpu);
 		t386_st_set_f32(fpu, fpu->top, bits);
 		return;
 	}
@@ -299,7 +301,7 @@ static inline void t386_fpu_ld_int(FPU *fpu, int32_t v)
 		const float f = (float) v;   // (fcvt.s.w: exact)
 		uint32_t bits;
 		memcpy(&bits, &f, 4);
-		fpu->top = (fpu->top - 1) & 7;
+		fppush_slot(fpu);
 		t386_st_set_f32(fpu, fpu->top, bits);
 		return;
 	}
@@ -334,40 +336,48 @@ uint64_t t386_fpu_st_f64(FPU *fpu)
 }
 
 // DB /2 /3 FIST(P) m32, DF /2 /3 FIST(P) m16: ST(0) rounded to an integer in the rounding mode (out of range: the
-// integer indefinite); a single by fcvt.w.s first
-static __attribute__((noinline)) uint32_t t386_fpu_st_i32_other(FPU *fpu)
+// integer indefinite); a single by fcvt.w.s first. The value in the low word; in the high one the flags the
+// instruction sets once the value is written (invalid 1, inexact 20h): the translated code's part, after its store.
+static __attribute__((noinline)) uint64_t t386_fpu_st_integer_other(FPU *fpu, int width)
 {
-	double a = fpround(fpget(fpu, 0), (fpu->cw >> 10) & 3);
-	return a < 2147483648.0 && a >= -2147483648.0 ? (uint32_t) (int32_t) a : 0x80000000;
+	u16 flags;
+	uint32_t bits = fp_integer_bits(fpu, width, (fpu->cw >> 10) & 3, &flags);
+	if (width == 16) bits = (uint16_t) bits;
+	return (uint64_t) flags << 32 | bits;
 }
-uint32_t t386_fpu_st_i32(FPU *fpu)
+#ifdef T386_HW_F32
+// (the single is below 2^30: with a fraction it is below 2^23 and its integer is a single exactly; without, the
+// integer converted back is the single itself)
+static inline uint64_t t386_fist_inexact(uint32_t bits, int32_t rounded)
+{
+	float source;
+	memcpy(&source, &bits, sizeof(source));
+	return (float) rounded != source ? (uint64_t) 0x20 << 32 : 0;
+}
+#endif
+uint64_t t386_fpu_st_i32(FPU *fpu)
 {
 #ifdef T386_HW_F32
 	uint32_t bits;
 	int32_t v;
 	if (t386_st_f32(fpu, fpu->top & 7, &bits) && t386_hw_f32_to_i32(bits, (fpu->cw >> 10) & 3, &v)) {
 		T386_FS(FS_FIST_HIT);
-		return v;
+		return t386_fist_inexact(bits, v) | (uint32_t) v;
 	}
 #endif
 	T386_FS(FS_FIST_SLOW);
-	return t386_fpu_st_i32_other(fpu);
+	return t386_fpu_st_integer_other(fpu, 32);
 }
-static __attribute__((noinline)) uint32_t t386_fpu_st_i16_other(FPU *fpu)
-{
-	double a = fpround(fpget(fpu, 0), (fpu->cw >> 10) & 3);
-	return a < 32768.0 && a >= -32768.0 ? (uint16_t) (int16_t) a : 0x8000;
-}
-uint32_t t386_fpu_st_i16(FPU *fpu)
+uint64_t t386_fpu_st_i16(FPU *fpu)
 {
 #ifdef T386_HW_F32
 	uint32_t bits;
 	int32_t v;
 	if (t386_st_f32(fpu, fpu->top & 7, &bits) && t386_hw_f32_to_i32(bits, (fpu->cw >> 10) & 3, &v) &&
 	    v == (int16_t) v)
-		return (uint16_t) v;
+		return t386_fist_inexact(bits, v) | (uint16_t) v;
 #endif
-	return t386_fpu_st_i16_other(fpu);
+	return t386_fpu_st_integer_other(fpu, 16);
 }
 
 // D9 /5 FLDCW, D9 /7 FNSTCW
@@ -391,7 +401,7 @@ static inline __attribute__((always_inline)) void t386_reg_arith(FPU *fpu, int g
 		T386_FS(FS_R_HIT);
 		T386_FS(!kept ? FS_IN_KEPT : !(a << 1) || !(b << 1) ? FS_IN_ZOP : !(r << 1) ? FS_IN_ZRES : FS_IN_CW);
 		t386_st_set_f32(fpu, esc ? sti : top, r);
-		if (esc == 6) fpu->top = (top + 1) & 7;
+		if (esc == 6) fppop(fpu);
 		return;
 	}
 #ifdef T386_FPU_STATS
@@ -434,7 +444,7 @@ void t386_fpu_fld_reg(FPU *fpu, uint32_t op_group, uint32_t i)
 		return;
 	}
 	T386_FS(FS_MOVE_HIT);
-	fpu->top = (top - 1) & 7;
+	fppush_slot(fpu);
 	t386_st_copy(fpu, (top - 1) & 7, sti);
 }
 void t386_fpu_fxch_reg(FPU *fpu, uint32_t op_group, uint32_t i)
@@ -463,6 +473,7 @@ void t386_fpu_fst_reg(FPU *fpu, uint32_t op_group, uint32_t i)
 	}
 	T386_FS(FS_MOVE_HIT);
 	t386_st_copy(fpu, sti, top);
+	fpu->empty &= ~(1u << i);
 }
 void t386_fpu_fstp_reg(FPU *fpu, uint32_t op_group, uint32_t i)
 {
@@ -473,7 +484,8 @@ void t386_fpu_fstp_reg(FPU *fpu, uint32_t op_group, uint32_t i)
 	}
 	T386_FS(FS_MOVE_HIT);
 	t386_st_copy(fpu, sti, top);
-	fpu->top = (top + 1) & 7;
+	fpu->empty &= ~(1u << i);
+	fppop(fpu);
 }
 
 // DF E0 FNSTSW AX: the status word, for AX
@@ -488,6 +500,7 @@ void t386_fpu_layout(struct T386FpuLayout *l)
 	l->cw = offsetof(FPU, cw);
 	l->sw = offsetof(FPU, sw);
 	l->top = offsetof(FPU, top);
+	l->empty = offsetof(FPU, empty);
 	l->rawtagw = offsetof(FPU, rawtagw);
 	l->sv = offsetof(FPU, sv);
 	l->sb = offsetof(FPU, sb);
@@ -495,12 +508,16 @@ void t386_fpu_layout(struct T386FpuLayout *l)
 // (the registers by their values: a single kept or st[]'s double, which st[] may not have yet)
 bool t386_fpu_same(const FPU *a, const FPU *b)
 {
-	if (a->cw != b->cw || a->sw != b->sw || a->top != b->top || a->rawtagr != b->rawtagr || a->rawtagw != b->rawtagw)
+	if (a->cw != b->cw || a->sw != b->sw || a->top != b->top || a->empty != b->empty ||
+	    a->rawtagw != b->rawtagw || ((a->rawtagr ^ b->rawtagr) & ~a->rawtagw))
 		return false;
 	for (int i = 0; i < 8; i++) {
 		union union64 x = { .f = a->sv >> i & 1 ? t386_single(a->sb[i]) : a->st[i] },
 			      y = { .f = b->sv >> i & 1 ? t386_single(b->sb[i]) : b->st[i] };
 		if (((a->rawtagr | a->rawtagw) >> i & 1) && x.i != y.i) return false;
+		// A write supersedes both rawst and its cached-read flag. FXCH can leave these stale
+		// fields in different slots. Compare the backing value even for logically empty slots.
+		if (a->rawtagw & (1u << i)) continue;
 		if (a->rawst[i].mant0 != b->rawst[i].mant0 || a->rawst[i].mant1 != b->rawst[i].mant1 ||
 		    a->rawst[i].high != b->rawst[i].high)
 			return false;

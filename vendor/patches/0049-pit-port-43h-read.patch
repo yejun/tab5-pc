@@ -1,0 +1,19 @@
+A read of port 43h gives FFh. The control word is write only; the read went to a fourth channel past the
+three, over the pic and set_irq pointers behind the array: with 4-byte pointers that channel's status_latched
+is the top byte of set_irq, so IN AL,43h cleared it and the next timer interrupt jumped to a bad address.
+Upstream: tiny386 ec16d43.
+
+--- a/i8254.c
++++ b/i8254.c
+@@ -235,6 +235,11 @@
+ 	PITChannelState *s;
+ 
+ 	addr &= 3;
++	/* 43h, the control word, is write only: the 8254 leaves the bus
++	   alone, and there is no fourth channel (channels[3] would be the
++	   pic and set_irq pointers after the array) */
++	if (addr == 3)
++		return 0xff;
+ 	s = &pit->channels[addr];
+ 	if (s->status_latched) {
+ 		s->status_latched = 0;
